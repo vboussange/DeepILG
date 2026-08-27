@@ -1,0 +1,60 @@
+{
+  "R": {
+    "Version": "4.4.2",
+    "Repositories": [
+      {
+        "Name": "CRAN",
+        "URL": "https://cloud.r-project.org"
+      }
+    ]
+  },
+  "Packages": {
+    "GA": {
+      "Package": "GA",
+      "Version": "3.2.5",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    },
+    "MuMIn": {
+      "Package": "MuMIn",
+      "Version": "1.46.0",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    },
+    "ResistanceGA2": {
+      "Package": "ResistanceGA2",
+      "Version": "1.1.20",
+      "Source": "GitHub",
+      "RemoteType": "github",
+      "RemoteHost": "api.github.com",
+      "RemoteUsername": "wpeterman",
+      "RemoteRepo": "ResistanceGA2",
+      "RemoteRef": "d0a0aab68cf4ee09c61bd1c6aff8df62051ffbfe",
+      "RemoteSha": "d0a0aab68cf4ee09c61bd1c6aff8df62051ffbfe"
+    },
+    "gdistance": {
+      "Package": "gdistance",
+      "Version": "1.6.5",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    },
+    "lme4": {
+      "Package": "lme4",
+      "Version": "1.1-37",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    },
+    "renv": {
+      "Package": "renv",
+      "Version": "1.1.5",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    },
+    "terra": {
+      "Package": "terra",
+      "Version": "1.9-46",
+      "Source": "Repository",
+      "Repository": "CRAN"
+    }
+  }
+}

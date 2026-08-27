@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked --group dev
+      - run: uv run python -c "import deepilg"
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - run: uv build
+      - name: Check that sensitive and generated artifacts are absent
+        shell: bash
+        run: |
+          test -z "$(git ls-files 'data/private/**' ':!data/private/.gitkeep')"
+          test -z "$(git ls-files '*.tif' '*.tiff' '*.gpkg' '*.xlsx' '*.eqx' '*.rds')"
+          test -z "$(git ls-files 'outputs/**' 'results/**' 'checkpoints/**')"
+
+  r-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4'
+      - run: Rscript -e 'parse(file = "resistancega/run.R")'

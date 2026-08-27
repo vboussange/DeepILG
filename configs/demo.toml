@@ -1,0 +1,49 @@
+[project]
+# Human-readable run name and ignored destination for generated files.
+name = "wade2025-artificial-coordinate-demo"
+output_dir = "outputs/demo"
+
+[data]
+# Public matrices and the fixed population-holdout assignment are safe to share.
+fst_dir = "data/wade2025/fst"
+coordinates = "data/demo/artificial_coordinates.csv"
+folds = "data/wade2025/folds.csv"
+# Downloaded products and processed tensors are local, generated data.
+cache_dir = "cache/demo"
+processed_dir = "outputs/demo/processed"
+# These locations are artificial and must never produce scientific figures.
+geolocation_status = "artificial"
+scientific_use = false
+
+[preprocessing]
+# Align covariates at 30 m and map each 32x32-pixel patch to one graph vertex.
+resolution_m = 30
+patch_size = 32
+# Approximate road length per area within a 300 m neighbourhood.
+road_radius_m = 300
+
+[training]
+# One deterministic neural fit is defined for each architecture and population-holdout fold.
+seed = 17
+# Select the best validation checkpoint, stopping after 50 stale epochs.
+epochs = 500
+patience = 50
+# Architecture-specific initial learning rates used in the manuscript benchmark.
+resnet9_learning_rate = 0.0001
+unet_learning_rate = 0.001
+# Halve the learning rate after 20 stale epochs, with a 1e-6 floor.
+lr_patience = 20
+lr_factor = 0.5
+min_learning_rate = 0.000001
+# AdamW regularization shared by both neural architectures.
+weight_decay = 0.0001
+# Encode at most 32 patches at once to bound accelerator memory.
+patch_batch_size = 32
+
+[solver]
+# Conjugate-gradient tolerances and iteration cap for grounded Laplacian systems.
+rtol = 1e-6
+atol = 1e-6
+max_steps = 1000
+# Reuse an AMJax hierarchy to reduce iteration count and memory pressure.
+use_amg = true

@@ -1,0 +1,11 @@
+CC0 1.0 Universal
+
+To the extent possible under law, the data providers have waived all
+copyright and related or neighboring rights to the bundled genetic matrices.
+The derived fold definition is likewise dedicated to the public domain under
+CC0 1.0 Universal.
+
+This notice does not waive scholarly norms: please cite Wade et al. (2025) and
+the Dryad dataset, DOI 10.5061/dryad.9kd51c5v6.
+
+Legal code: https://creativecommons.org/publicdomain/zero/1.0/legalcode

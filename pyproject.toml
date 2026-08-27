@@ -1,0 +1,74 @@
+[project]
+name = "deepilg"
+version = "0.1.0"
+description = "Differentiable inverse landscape genetics with deep geospatial encoders"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+authors = [
+  { name = "DeepILG contributors" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = [
+  "amjax==0.0.3",
+  "equinox>=0.13.2,<0.14",
+  "geopandas>=1.1.1,<2",
+  "jax>=0.10.0,<0.11",
+  # The lock resolves JAXScape against base JAX; CUDA remains opt-in below.
+  "jaxscape==0.0.9",
+  "lineax>=0.1.0,<0.2",
+  "matplotlib>=3.10.3,<4",
+  "numpy>=2.2.6,<3",
+  "optax>=0.2.8,<0.3",
+  "planetary-computer>=1.0.0,<2",
+  "pyamg>=5.3,<6",
+  "rasterio>=1.4,<2",
+  "requests>=2.32,<3",
+  "scipy>=1.15,<2",
+  "shapely>=2.1,<3",
+]
+
+[project.optional-dependencies]
+gpu = [
+  "jax[cuda]>=0.10.0,<0.11; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<10",
+  "ruff==0.15.22",
+]
+
+[project.scripts]
+deepilg = "deepilg.cli:main"
+
+[build-system]
+requires = ["setuptools>=81,<82"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D"]
+ignore = ["D105", "D107", "D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D103"]
+
+[tool.ruff.format]
+docstring-code-format = true
