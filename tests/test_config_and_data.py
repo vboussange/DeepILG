@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from deepilg.config import load_config
-from deepilg.data import linearize_fst, load_fst_csv, validate_fst_matrix
+from deepilg.data import discover_fst_regions, linearize_fst, load_fst_csv, validate_fst_matrix
 
 
 def _write_config(path: Path, *, artificial: bool = True) -> None:
@@ -90,6 +90,22 @@ def test_fst_loader_accepts_only_missing_diagonal(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="off-diagonal"):
         load_fst_csv(source, region="CWMA")
+
+
+def test_discover_fst_regions_reads_an_arbitrary_region_set(tmp_path: Path) -> None:
+    (tmp_path / "north_FST.csv").write_text("x", encoding="utf-8")
+    (tmp_path / "south_fst_matrix.csv").write_text("x", encoding="utf-8")
+    (tmp_path / "notes.csv").write_text("x", encoding="utf-8")
+    regions = discover_fst_regions(tmp_path)
+    assert list(regions) == ["north", "south"]
+    assert regions["north"].name == "north_FST.csv"
+
+
+def test_discover_fst_regions_rejects_ambiguous_names(tmp_path: Path) -> None:
+    (tmp_path / "east_FST.csv").write_text("x", encoding="utf-8")
+    (tmp_path / "east_fst_matrix.csv").write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="map to region"):
+        discover_fst_regions(tmp_path)
 
 
 def test_fst_validation_and_linearization() -> None:

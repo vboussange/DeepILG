@@ -18,11 +18,16 @@ import optax
 from deepilg.config import ExperimentConfig
 from deepilg.data import FSTMatrix, linearize_fst, load_fst_directory
 from deepilg.loss import region_balanced_log1p_mse
-from deepilg.models import GeographicDistanceModel, ResNet9Conductance, UNetEmbeddingDistance
-from deepilg.models.common import pixel_to_patch_nodes
+from deepilg.models import (
+    ConductanceModel,
+    EmbeddingDistanceModel,
+    GeographicDistanceModel,
+    ResNet9Conductance,
+    UNetEmbeddingDistance,
+)
 from deepilg.preprocessing import FEATURE_NAMES, ProcessedRegion, validate_processed_region
 from deepilg.provenance import write_workflow_manifest
-from deepilg.solver import AMGContext, build_amg_context, effective_resistance
+from deepilg.solver import AMGContext, build_amg_context
 from deepilg.splits import FoldAssignments, load_fold_assignments, pair_mask, upper_triangle
 
 ModelName = Literal["reference", "resnet9", "unet"]
@@ -56,11 +61,11 @@ class TrainingResult:
 
 
 def load_fold_batches(config: ExperimentConfig, fold: int) -> tuple[RegionBatch, ...]:
-    """Load all five processed regions for one population-holdout fold."""
-    if fold not in range(5):
-        raise ValueError("fold must lie in 0..4")
+    """Load every processed region for one population-holdout fold."""
     matrices = load_fst_directory(config.data.fst_dir)
     assignments = load_fold_assignments(config.data.folds)
+    if fold not in assignments.fold_indices:
+        raise ValueError(f"fold must be one of {list(assignments.fold_indices)}")
     batches = []
     for region, matrix in matrices.items():
         batches.append(
@@ -186,12 +191,12 @@ def initialise_model(
 
 
 def build_solver_contexts(
-    model: ResNet9Conductance | UNetEmbeddingDistance,
+    model: ConductanceModel | EmbeddingDistanceModel,
     batches: Sequence[RegionBatch],
     config: ExperimentConfig,
 ) -> dict[str, AMGContext]:
     """Build one shape-specific unit-conductance AMG hierarchy per region."""
-    if not isinstance(model, ResNet9Conductance) or not config.solver.use_amg:
+    if not isinstance(model, ConductanceModel) or not config.solver.use_amg:
         return {}
     contexts = {}
     for batch in batches:
@@ -210,17 +215,21 @@ def build_solver_contexts(
 
 
 def predict_matrix(
-    model: ResNet9Conductance | UNetEmbeddingDistance,
+    model: ConductanceModel | EmbeddingDistanceModel,
     batch: RegionBatch,
     *,
     context: AMGContext | None = None,
     inference: bool = True,
     key: jax.Array | None = None,
 ) -> jax.Array:
-    """Predict one population-distance matrix."""
-    if isinstance(model, ResNet9Conductance):
-        matrix, _ = predict_resnet_matrix_and_conductance(model, batch, context=context)
-        return matrix
+    """Predict one population-distance matrix, dispatching on the encoder family."""
+    if isinstance(model, ConductanceModel):
+        return model.predict_distances(
+            batch.features,
+            batch.pixel_nodes,
+            context=context,
+            patch_batch_size=batch.patch_batch_size,
+        )
     return model.predict_distances(
         batch.features,
         batch.pixel_nodes,
@@ -228,22 +237,6 @@ def predict_matrix(
         key=key,
         patch_batch_size=batch.patch_batch_size,
     )
-
-
-def predict_resnet_matrix_and_conductance(
-    model: ResNet9Conductance,
-    batch: RegionBatch,
-    *,
-    context: AMGContext | None,
-) -> tuple[jax.Array, jax.Array]:
-    """Return resistance distances and their shared predicted conductance grid."""
-    conductance = model(batch.features, patch_batch_size=batch.patch_batch_size)
-    nodes = pixel_to_patch_nodes(
-        batch.pixel_nodes,
-        raster_shape=(batch.features.shape[0], batch.features.shape[1]),
-        patch_size=model.patch_size,
-    )
-    return effective_resistance(conductance, nodes, context=context), conductance
 
 
 def objective(

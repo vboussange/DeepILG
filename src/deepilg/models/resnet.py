@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from deepilg.models.base import ConductanceModel
 from deepilg.models.common import patchify
 
 
@@ -32,7 +33,7 @@ class ResidualBlock(eqx.Module):
         return jax.nn.relu(outputs + residual)
 
 
-class ResNet9Conductance(eqx.Module):
+class ResNet9Conductance(ConductanceModel):
     """Map each native-resolution raster patch to one positive conductance."""
 
     conv1: eqx.nn.Conv2d
@@ -74,7 +75,7 @@ class ResNet9Conductance(eqx.Module):
         values = jnp.mean(values, axis=(1, 2))
         return jnp.clip(jnp.exp(self.output(values).squeeze()) + 1e-2, 1e-2, 1e3)
 
-    def __call__(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:
+    def conductance(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:
         """Return the patch-grid conductance surface for one HWC raster."""
         patches, grid_shape = patchify(features, self.patch_size)
         batch_size = patches.shape[0] if patch_batch_size is None else patch_batch_size
@@ -86,3 +87,7 @@ class ResNet9Conductance(eqx.Module):
         ]
         conductance = jnp.concatenate(chunks)
         return conductance.reshape(grid_shape)
+
+    def __call__(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:
+        """Alias for :meth:`conductance`."""
+        return self.conductance(features, patch_batch_size=patch_batch_size)

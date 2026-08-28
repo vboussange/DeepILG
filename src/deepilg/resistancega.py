@@ -12,11 +12,9 @@ import numpy as np
 import rasterio
 
 from deepilg.config import ExperimentConfig
-from deepilg.data import linearize_fst, load_fst_directory
+from deepilg.data import discover_fst_regions, linearize_fst, load_fst_directory
 from deepilg.provenance import write_workflow_manifest
 from deepilg.splits import load_fold_assignments, pair_mask, upper_triangle
-
-REGIONS = ("CWMA", "GSMNP", "ORR", "PCSF", "RRG")
 
 
 def run_resistancega(
@@ -33,14 +31,16 @@ def run_resistancega(
     The fit seed is read from ``config.training.seed``. Prediction always reuses
     the existing region-specific fit and never invokes optimization.
     """
-    if fold not in range(5):
-        raise ValueError("fold must lie in 0..4")
-    if region not in REGIONS:
-        raise ValueError(f"region must be one of: {', '.join(REGIONS)}")
     if mode == "fit" and split is not None:
         raise ValueError("--split is valid only when --mode predict")
     if mode == "predict" and split is None:
         raise ValueError("--split is required when --mode predict")
+    regions = tuple(discover_fst_regions(config.data.fst_dir))
+    if region not in regions:
+        raise ValueError(f"region must be one of: {', '.join(regions)}")
+    folds = load_fold_assignments(config.data.folds).fold_indices
+    if fold not in folds:
+        raise ValueError(f"fold must be one of {list(folds)}")
 
     script = config.root / "resistancega" / "run.R"
     if not script.is_file():
@@ -91,10 +91,10 @@ def run_resistancega(
 
 def export_resistancega_inputs(config: ExperimentConfig, *, fold: int) -> Path:
     """Export one population-holdout fold without fitting or invoking R."""
-    if fold not in range(5):
-        raise ValueError("fold must lie in 0..4")
     matrices = load_fst_directory(config.data.fst_dir)
     assignments = load_fold_assignments(config.data.folds)
+    if fold not in assignments.fold_indices:
+        raise ValueError(f"fold must be one of {list(assignments.fold_indices)}")
     root = config.project.output_dir / "resistancega" / "inputs" / f"fold_{fold:02d}"
     write_workflow_manifest(config, config.project.output_dir / "resistancega" / "inputs")
     for region, matrix in matrices.items():

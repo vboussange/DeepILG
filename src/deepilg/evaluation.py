@@ -14,7 +14,7 @@ import numpy as np
 
 from deepilg.config import ExperimentConfig
 from deepilg.metrics import FoldMetrics, evaluate_fold
-from deepilg.models import GeographicDistanceModel, ResNet9Conductance, UNetEmbeddingDistance
+from deepilg.models import ConductanceModel, EmbeddingDistanceModel, GeographicDistanceModel
 from deepilg.provenance import write_workflow_manifest
 from deepilg.splits import upper_triangle
 from deepilg.training import (
@@ -22,10 +22,7 @@ from deepilg.training import (
     initialise_model,
     load_fold_batches,
     predict_matrix,
-    predict_resnet_matrix_and_conductance,
 )
-
-EXPECTED_TEST_PAIRS = (170, 158, 159, 167, 167)
 
 
 def evaluate_model(
@@ -68,18 +65,19 @@ def evaluate_model(
             delta = points[:, None, :] - points[None, :, :]
             prediction_matrix = reference.predict(np.sqrt(np.sum(delta * delta, axis=-1)))
         else:
-            assert isinstance(model, (ResNet9Conductance, UNetEmbeddingDistance))
-            if isinstance(model, ResNet9Conductance):
-                predicted_matrix, conductance_array = predict_resnet_matrix_and_conductance(
-                    model,
-                    batch,
+            assert isinstance(model, (ConductanceModel, EmbeddingDistanceModel))
+            if isinstance(model, ConductanceModel):
+                predicted_matrix, conductance_array = model.resistance_and_conductance(
+                    batch.features,
+                    batch.pixel_nodes,
                     context=contexts.get(batch.region),
+                    patch_batch_size=batch.patch_batch_size,
                 )
                 prediction_matrix = np.asarray(predicted_matrix)
                 surface_dir = (
                     config.project.output_dir
                     / "evaluation"
-                    / "resnet9"
+                    / model_name
                     / f"fold_{fold}"
                     / "surfaces"
                 )
@@ -126,11 +124,6 @@ def evaluate_model(
             )
 
     metrics = evaluate_fold(predictions_by_region, targets_by_region)
-    if metrics.n_pairs != EXPECTED_TEST_PAIRS[fold]:
-        raise ValueError(
-            f"Fold {fold}: expected {EXPECTED_TEST_PAIRS[fold]} held-out test pairs, "
-            f"found {metrics.n_pairs}"
-        )
     output = config.project.output_dir / "evaluation" / model_name / f"fold_{fold}"
     output.mkdir(parents=True, exist_ok=True)
     prediction_path = output / "test_predictions.csv"
@@ -225,11 +218,6 @@ def _evaluate_resistancega(
             )
 
     metrics = evaluate_fold(predictions_by_region, targets_by_region)
-    if metrics.n_pairs != EXPECTED_TEST_PAIRS[fold]:
-        raise ValueError(
-            f"Fold {fold}: expected {EXPECTED_TEST_PAIRS[fold]} held-out test pairs, "
-            f"found {metrics.n_pairs}"
-        )
     output = config.project.output_dir / "evaluation" / "resistancega" / f"fold_{fold}"
     output.mkdir(parents=True, exist_ok=True)
     prediction_path = output / "test_predictions.csv"

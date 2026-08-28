@@ -10,7 +10,6 @@ from pathlib import Path
 import numpy as np
 
 PARTITIONS = ("train", "validation", "test")
-N_FOLDS = 5
 
 
 @dataclass(frozen=True)
@@ -23,6 +22,11 @@ class FoldAssignments:
     def regions(self) -> tuple[str, ...]:
         """Return region identifiers in lexical order."""
         return tuple(sorted({key[0] for key in self.assignments}))
+
+    @property
+    def fold_indices(self) -> tuple[int, ...]:
+        """Return the sorted fold indices present in the table."""
+        return tuple(sorted({key[1] for key in self.assignments}))
 
     def populations(self, region: str) -> tuple[str, ...]:
         """Return the populations represented for one region."""
@@ -78,15 +82,23 @@ def validate_fold_assignments(
     folds: FoldAssignments,
     population_ids_by_region: Mapping[str, Iterable[str]] | None = None,
 ) -> None:
-    """Check exhaustive, non-overlapping five-fold population partitions."""
+    """Check exhaustive, non-overlapping k-fold population partitions.
+
+    The number of folds is inferred from the table; any k is accepted as long
+    as the fold indices form a contiguous range from zero and every region
+    shares that range.
+    """
     if not folds.assignments:
         raise ValueError("Fold assignment table is empty")
+    fold_indices = folds.fold_indices
+    if fold_indices != tuple(range(len(fold_indices))):
+        raise ValueError(
+            f"Fold indices must be a contiguous range starting at zero, got {list(fold_indices)}"
+        )
     for key, partition in folds.assignments.items():
-        region, fold, population = key
+        region, _fold, population = key
         if not region or not population:
             raise ValueError("Fold region and population_id must be non-empty")
-        if fold not in range(N_FOLDS):
-            raise ValueError(f"Fold index must lie in 0..{N_FOLDS - 1}: {key}")
         if partition not in PARTITIONS:
             raise ValueError(f"Unknown partition {partition!r} for {key}")
 
@@ -94,7 +106,7 @@ def validate_fold_assignments(
         populations = folds.populations(region)
         expected = set(populations)
         test_counts = {population: 0 for population in populations}
-        for fold in range(N_FOLDS):
+        for fold in fold_indices:
             observed = {
                 population
                 for population in populations

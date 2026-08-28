@@ -19,7 +19,7 @@ from deepilg.evaluation import evaluate_model
 from deepilg.figures import benchmark_figure, resistance_surface_figure
 from deepilg.preprocessing import preprocess_downloaded_products
 from deepilg.provenance import require_publication_safe_manifest
-from deepilg.resistancega import REGIONS, export_resistancega_inputs, run_resistancega
+from deepilg.resistancega import export_resistancega_inputs, run_resistancega
 from deepilg.splits import load_fold_assignments, validate_fold_assignments
 from deepilg.training import fit_reference_model, train_neural_model
 
@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     train = subcommands.add_parser("train", help="Fit one model for one population-holdout fold.")
     _config_argument(train)
     train.add_argument("--model", choices=("reference", "resnet9", "unet"), required=True)
-    train.add_argument("--fold", type=int, choices=range(5), required=True)
+    train.add_argument("--fold", type=_fold, required=True, help="Population-holdout fold index.")
     train.add_argument("--resume", action="store_true", help="Resume a neural latest checkpoint.")
 
     evaluate = subcommands.add_parser(
@@ -61,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument(
         "--model", choices=("reference", "resistancega", "resnet9", "unet"), required=True
     )
-    evaluate.add_argument("--fold", type=int, choices=range(5), required=True)
+    evaluate.add_argument(
+        "--fold", type=_fold, required=True, help="Population-holdout fold index."
+    )
 
     figures = subcommands.add_parser("figures", help="Generate the benchmark performance figure.")
     _config_argument(figures)
@@ -82,14 +84,18 @@ def build_parser() -> argparse.ArgumentParser:
         "resistancega-export", help="Export one fold for the accompanying R workflow."
     )
     _config_argument(resistancega_export)
-    resistancega_export.add_argument("--fold", type=int, choices=range(5), required=True)
+    resistancega_export.add_argument(
+        "--fold", type=_fold, required=True, help="Population-holdout fold index."
+    )
 
     resistancega = subcommands.add_parser(
         "resistancega", help="Run one configured ResistanceGA2 fit or prediction."
     )
     _config_argument(resistancega)
-    resistancega.add_argument("--fold", type=int, choices=range(5), required=True)
-    resistancega.add_argument("--region", choices=REGIONS, required=True)
+    resistancega.add_argument(
+        "--fold", type=_fold, required=True, help="Population-holdout fold index."
+    )
+    resistancega.add_argument("--region", required=True, help="One region present in the dataset.")
     resistancega.add_argument("--mode", choices=("fit", "predict"), required=True)
     resistancega.add_argument("--split", choices=("validation", "test"))
     resistancega.add_argument(
@@ -100,6 +106,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, required=True, help="Path to a TOML configuration.")
+
+
+def _fold(value: str) -> int:
+    """Parse a non-negative fold index; existence is checked against the folds file."""
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("fold must be an integer") from error
+    if number < 0:
+        raise argparse.ArgumentTypeError("fold must be a non-negative integer")
+    return number
 
 
 def validate_inputs(config: ExperimentConfig) -> dict[str, object]:
@@ -230,7 +247,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _cached_products(
     config: ExperimentConfig, regions: Sequence[str] | None
 ) -> tuple[DownloadedProducts, ...]:
-    requested = set(regions) if regions else {"CWMA", "GSMNP", "ORR", "PCSF", "RRG"}
+    if regions:
+        requested = set(regions)
+    elif config.data.cache_dir.is_dir():
+        requested = {path.name for path in config.data.cache_dir.iterdir() if path.is_dir()}
+    else:
+        requested = set()
+    if not requested:
+        raise FileNotFoundError(
+            f"No cached regions found under {config.data.cache_dir}; run `deepilg download` first"
+        )
     products = []
     for region in sorted(requested):
         directory = config.data.cache_dir / region

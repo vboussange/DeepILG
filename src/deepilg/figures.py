@@ -35,18 +35,19 @@ def benchmark_figure(
     required = {"model", "fold", "pearson_r", "rmse"}
     if not rows or not required.issubset(rows[0]):
         raise ValueError(f"Metrics CSV must contain {sorted(required)}")
+    present = {row["model"] for row in rows}
+    labels = [model for model in model_order if model in present]
+    labels += sorted(present - set(model_order))
+    if not labels:
+        raise ValueError("Metrics CSV contains no model rows")
     values: dict[str, dict[str, list[float]]] = {
-        model: {"pearson_r": [], "rmse": []} for model in model_order
+        model: {"pearson_r": [], "rmse": []} for model in labels
     }
     for row in rows:
-        if row["model"] in values:
-            values[row["model"]]["pearson_r"].append(float(row["pearson_r"]))
-            values[row["model"]]["rmse"].append(float(row["rmse"]))
-    if any(not values[model]["pearson_r"] for model in model_order):
-        raise ValueError("Metrics CSV does not contain every requested model")
+        values[row["model"]]["pearson_r"].append(float(row["pearson_r"]))
+        values[row["model"]]["rmse"].append(float(row["rmse"]))
 
     figure, axes = plt.subplots(1, 2, figsize=(6.5, 2.6), constrained_layout=True)
-    labels = list(model_order)
     for axis, metric, title in zip(
         axes,
         ("pearson_r", "rmse"),
@@ -72,11 +73,19 @@ def resistance_surface_figure(
     output: str | Path,
     *,
     patch_size: int = 32,
-    regions: Sequence[str] = ("CWMA", "GSMNP", "ORR", "PCSF", "RRG"),
+    regions: Sequence[str] | None = None,
 ) -> Path:
-    """Plot context and resistance summaries across population-holdout models."""
+    """Plot context and resistance summaries across population-holdout models.
+
+    ``regions`` defaults to every processed region; the folds summarised are
+    discovered from the ResNet-9 surfaces written during evaluation.
+    """
     evaluation_dir = Path(evaluation_dir)
     processed_dir = Path(processed_dir)
+    if regions is None:
+        regions = tuple(sorted(path.name for path in processed_dir.iterdir() if path.is_dir()))
+    if not regions:
+        raise FileNotFoundError(f"No processed regions found under {processed_dir}")
     figure, axes = plt.subplots(
         len(regions),
         3,
@@ -85,14 +94,12 @@ def resistance_surface_figure(
         squeeze=False,
     )
     for row, region in enumerate(regions):
-        paths = [
-            evaluation_dir / "resnet9" / f"fold_{fold}" / "surfaces" / f"{region}_resistance.npy"
-            for fold in range(5)
-        ]
-        missing = [str(path) for path in paths if not path.is_file()]
-        if missing:
+        paths = sorted(
+            (evaluation_dir / "resnet9").glob(f"fold_*/surfaces/{region}_resistance.npy")
+        )
+        if not paths:
             raise FileNotFoundError(
-                f"Missing fold-wise resistance surfaces for {region}: {missing}"
+                f"No fold-wise resistance surfaces found for {region} under {evaluation_dir}"
             )
         median, iqr = summarize_surfaces([np.load(path) for path in paths])
         with rasterio.open(processed_dir / region / "covariates.tif") as raster:

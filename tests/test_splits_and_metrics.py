@@ -40,6 +40,36 @@ def test_population_masks_are_endpoint_based_and_disjoint() -> None:
     assert not np.any(validation & test)
 
 
+def test_validate_fold_assignments_infers_the_fold_count() -> None:
+    populations = tuple(f"P{index}" for index in range(6))
+    assignments = {}
+    for fold in range(3):  # three folds, not five
+        test = {populations[2 * fold], populations[2 * fold + 1]}
+        validation = {populations[(2 * fold + 2) % len(populations)]}
+        for population in populations:
+            partition = (
+                "test"
+                if population in test
+                else "validation"
+                if population in validation
+                else "train"
+            )
+            assignments[("REGION", fold, population)] = partition
+    folds = FoldAssignments(assignments)
+    assert folds.fold_indices == (0, 1, 2)
+    validate_fold_assignments(folds)
+
+
+def test_validate_fold_assignments_rejects_non_contiguous_folds() -> None:
+    folds, _ = _folds()
+    shifted = {
+        (region, fold + 1, population): value
+        for (region, fold, population), value in folds.assignments.items()
+    }
+    with pytest.raises(ValueError, match="contiguous range"):
+        validate_fold_assignments(FoldAssignments(shifted))
+
+
 def test_region_balanced_loss_does_not_weight_regions_by_pair_count() -> None:
     predictions = {"small": np.asarray([0.0]), "large": np.zeros(10)}
     targets = {"small": np.asarray([1.0]), "large": np.zeros(10)}

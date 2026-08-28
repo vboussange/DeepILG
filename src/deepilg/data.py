@@ -10,8 +10,10 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
-REGIONS = ("CWMA", "GSMNP", "ORR", "PCSF", "RRG")
-EXPECTED_POPULATIONS = {"CWMA": 14, "GSMNP": 12, "ORR": 16, "PCSF": 10, "RRG": 16}
+# Filename suffixes (matched case-insensitively) that mark a per-region FST
+# matrix.  The region name is the remaining stem, e.g. ``CWMA_FST.csv`` and
+# ``CWMA_fst_matrix.csv`` both denote region ``CWMA``.
+FST_SUFFIXES = ("_fst_matrix", "_fst")
 
 
 @dataclass(frozen=True)
@@ -131,23 +133,45 @@ def load_fst_csv(path: str | Path, *, region: str | None = None) -> FSTMatrix:
     return validate_fst_matrix(values, row_ids, region=region or source.stem.split("_")[0])
 
 
-def load_fst_directory(path: str | Path) -> dict[str, FSTMatrix]:
-    """Load the five canonical ``<REGION>_fst_matrix.csv`` files."""
+def discover_fst_regions(path: str | Path) -> dict[str, Path]:
+    """Map each region to its ``<REGION>_FST.csv`` file, discovered from ``path``.
+
+    Any number of regions is supported: the region set is read from the files
+    present rather than fixed, so a new study only needs its own matrices here.
+    Region names come from the filename stem with a recognised FST suffix
+    removed, and the result is ordered lexicographically for determinism.
+    """
     directory = Path(path)
-    matrices: dict[str, FSTMatrix] = {}
-    for region in REGIONS:
-        candidates = (
-            directory / f"{region}_fst_matrix.csv",
-            directory / f"{region}_FST.csv",
-            directory / f"{region}_fst.csv",
-        )
-        source = next((candidate for candidate in candidates if candidate.is_file()), None)
-        if source is None:
-            raise FileNotFoundError(
-                f"Missing FST matrix for {region}; expected {candidates[0].name}"
+    if not directory.is_dir():
+        raise FileNotFoundError(f"FST directory does not exist: {directory}")
+    found: dict[str, Path] = {}
+    for source in sorted(directory.glob("*.csv")):
+        stem = source.stem
+        suffix = next((item for item in FST_SUFFIXES if stem.lower().endswith(item)), None)
+        if suffix is None:
+            continue
+        region = stem[: len(stem) - len(suffix)]
+        if not region:
+            continue
+        if region in found:
+            raise ValueError(
+                f"Multiple FST files map to region {region!r}: "
+                f"{found[region].name} and {source.name}"
             )
-        matrices[region] = load_fst_csv(source, region=region)
-    return matrices
+        found[region] = source
+    if not found:
+        raise FileNotFoundError(
+            f"No FST matrices found in {directory}; expected files like '<REGION>_FST.csv'"
+        )
+    return dict(sorted(found.items()))
+
+
+def load_fst_directory(path: str | Path) -> dict[str, FSTMatrix]:
+    """Load every ``<REGION>_FST.csv`` matrix discovered under ``path``."""
+    return {
+        region: load_fst_csv(source, region=region)
+        for region, source in discover_fst_regions(path).items()
+    }
 
 
 def linearize_fst(values: np.ndarray | jnp.ndarray) -> jnp.ndarray:

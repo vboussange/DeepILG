@@ -3,8 +3,14 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
-from deepilg.models import ResNet9Conductance, UNetEmbeddingDistance
+from deepilg.models import (
+    ConductanceModel,
+    EmbeddingDistanceModel,
+    ResNet9Conductance,
+    UNetEmbeddingDistance,
+)
 from deepilg.models.common import patchify, pixel_to_patch_nodes
 
 
@@ -19,6 +25,33 @@ def test_patchify_and_shared_patch_nodes() -> None:
         patch_size=4,
     )
     np.testing.assert_array_equal(nodes, np.asarray([0, 0, 4]))
+
+
+def test_encoder_families_are_distinct() -> None:
+    resnet = ResNet9Conductance(in_channels=14, patch_size=4, key=jax.random.PRNGKey(0))
+    unet = UNetEmbeddingDistance(
+        in_channels=14,
+        patch_size=4,
+        base_channels=8,
+        embedding_dim=4,
+        dropout=0.0,
+        key=jax.random.PRNGKey(1),
+    )
+    assert isinstance(resnet, ConductanceModel) and not isinstance(resnet, EmbeddingDistanceModel)
+    assert isinstance(unet, EmbeddingDistanceModel) and not isinstance(unet, ConductanceModel)
+    features = jnp.ones((8, 8, 14), dtype=jnp.float32)
+    matrix, conductance = resnet.resistance_and_conductance(features, jnp.asarray([0, 63]))
+    assert conductance.shape == (2, 2)
+    np.testing.assert_allclose(
+        matrix, resnet.predict_distances(features, jnp.asarray([0, 63])), rtol=1e-5
+    )
+
+
+def test_abstract_families_cannot_be_instantiated() -> None:
+    with pytest.raises(TypeError):
+        ConductanceModel()
+    with pytest.raises(TypeError):
+        EmbeddingDistanceModel()
 
 
 def test_resnet9_returns_positive_patch_conductances() -> None:

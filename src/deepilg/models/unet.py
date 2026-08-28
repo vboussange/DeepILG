@@ -6,7 +6,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from deepilg.models.common import patchify, pixel_to_patch_nodes, squared_embedding_distances
+from deepilg.models.base import EmbeddingDistanceModel
+from deepilg.models.common import patchify
 
 
 def _match_shape(values: jax.Array, reference: jax.Array) -> jax.Array:
@@ -68,7 +69,7 @@ class ResidualConvBlock(eqx.Module):
         return jax.nn.gelu(values + residual)
 
 
-class UNetEmbeddingDistance(eqx.Module):
+class UNetEmbeddingDistance(EmbeddingDistanceModel):
     """Predict patch embeddings and squared distances between population nodes."""
 
     patch_embedding: eqx.nn.Linear
@@ -213,27 +214,3 @@ class UNetEmbeddingDistance(eqx.Module):
         values = self.merge1_norm(self.merge1(jnp.concatenate([values, skip1], axis=0)))
         values = self.decoder1(jax.nn.gelu(values), inference=inference, key=keys[4])
         return jnp.moveaxis(self.embedding_head(values), 0, -1)
-
-    def predict_distances(
-        self,
-        features: jax.Array,
-        pixel_nodes: jax.Array,
-        *,
-        inference: bool = True,
-        key: jax.Array | None = None,
-        patch_batch_size: int | None = None,
-    ) -> jax.Array:
-        """Predict all pairwise population distances for one raster."""
-        grid = self.embedding_grid(
-            features,
-            inference=inference,
-            key=key,
-            patch_batch_size=patch_batch_size,
-        )
-        nodes = pixel_to_patch_nodes(
-            pixel_nodes,
-            raster_shape=(features.shape[0], features.shape[1]),
-            patch_size=self.patch_size,
-        )
-        embeddings = grid.reshape(-1, self.embedding_dim)[nodes]
-        return squared_embedding_distances(embeddings)
