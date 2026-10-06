@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,27 @@ class SolverConfig:
     atol: float = 1e-6
     max_steps: int = 1_000
     use_amg: bool = True
+
+    def validate(self) -> None:
+        """Reject settings that cannot define a convergent solver run."""
+        for name, tolerance in (("rtol", self.rtol), ("atol", self.atol)):
+            if (
+                isinstance(tolerance, bool)
+                or not isinstance(tolerance, Real)
+                or not math.isfinite(tolerance)
+                or tolerance < 0
+            ):
+                raise ValueError(f"[solver].{name} must be finite and non-negative")
+        if self.rtol == 0 and self.atol == 0:
+            raise ValueError("At least one solver tolerance must be positive")
+        if (
+            isinstance(self.max_steps, bool)
+            or not isinstance(self.max_steps, Integral)
+            or self.max_steps <= 0
+        ):
+            raise ValueError("[solver].max_steps must be a positive integer")
+        if not isinstance(self.use_amg, bool):
+            raise ValueError("[solver].use_amg must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -152,10 +175,7 @@ def _validate(config: ExperimentConfig) -> None:
         config.training.unet_learning_rate,
     ):
         raise ValueError("min_learning_rate must not exceed either initial learning rate")
-    if config.solver.rtol < 0 or config.solver.atol < 0:
-        raise ValueError("solver tolerances must be non-negative")
-    if config.solver.max_steps <= 0:
-        raise ValueError("[solver].max_steps must be positive")
+    config.solver.validate()
 
 
 def load_config(path: str | Path) -> ExperimentConfig:

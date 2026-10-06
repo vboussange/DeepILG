@@ -6,8 +6,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from deepilg.models.base import EmbeddingDistanceModel
-from deepilg.models.common import patchify
+from .base import EmbeddingDistanceModel
+from .common import patchify
 
 
 def _match_shape(values: jax.Array, reference: jax.Array) -> jax.Array:

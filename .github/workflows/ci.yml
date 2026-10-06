@@ -17,10 +17,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --group dev
-      - run: uv run python -c "import deepilg"
+      - run: uv run python -I -c "import deepilg"
       - run: uv run ruff format --check .
       - run: uv run ruff check .
-      - run: uv run pytest
+      - run: JAX_ENABLE_X64=true uv run pytest
       - run: uv build
       - name: Check that sensitive and generated artifacts are absent
         shell: bash

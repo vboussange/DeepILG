@@ -10,11 +10,29 @@ This is a companion repository for the paper
 
 ## Installation
 
+This directory is a self-contained Python project. Run the commands below from
+this directory; no module or `PYTHONPATH` entry from a parent repository is
+required.
+
 ```bash
 uv sync --locked            # append --extra gpu on Linux/x86-64 with CUDA
 uv run deepilg --help
-uv run pytest
+JAX_ENABLE_X64=true uv run pytest
 ```
+
+The locked GPU extra pins cuDNN 9.8.0.87 for compatibility with the manuscript
+V100/driver-535 cluster. ResNet9 keeps its neural network in float32 but solves
+effective resistance in float64 for numerical stability. Enable JAX float64 on
+each ResNet9 training or evaluation command:
+
+```bash
+JAX_ENABLE_X64=true uv run deepilg train --config configs/demo.toml --model resnet9 --fold 0
+```
+
+AMG preconditioning and differentiable linear solves are provided by
+JAXScape 0.0.10 with its AMJax extra; DeepILG does not maintain a separate solver
+implementation. The configured tolerances and iteration limit apply with or
+without AMG.
 
 ## Quick start
 
@@ -22,8 +40,8 @@ uv run pytest
 uv run deepilg validate   --config configs/demo.toml
 uv run deepilg download   --config configs/demo.toml
 uv run deepilg preprocess --config configs/demo.toml
-uv run deepilg train      --config configs/demo.toml --model resnet9 --fold 0
-uv run deepilg evaluate   --config configs/demo.toml --model resnet9 --fold 0
+JAX_ENABLE_X64=true uv run deepilg train    --config configs/demo.toml --model resnet9 --fold 0
+JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/demo.toml --model resnet9 --fold 0
 ```
 
 `configs/demo.toml` contains default configuration settings to run the whole pipeline on a synthetic dataset. Its outputs carry no ecological meaning; files land under `cache/demo/` and `outputs/demo/`.
@@ -69,10 +87,12 @@ Fit and score the pipeline models on every fold:
 
 ```bash
 for fold in 0 1 2 3 4; do
-  for model in reference unet resnet9; do
+  for model in reference unet; do
     uv run deepilg train    --config configs/benchmark.toml --model "$model" --fold "$fold"
     uv run deepilg evaluate --config configs/benchmark.toml --model "$model" --fold "$fold"
   done
+  JAX_ENABLE_X64=true uv run deepilg train    --config configs/benchmark.toml --model resnet9 --fold "$fold"
+  JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/benchmark.toml --model resnet9 --fold "$fold"
 done
 ```
 

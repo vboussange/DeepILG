@@ -15,8 +15,8 @@ from abc import abstractmethod
 import equinox as eqx
 import jax
 
-from deepilg.models.common import pixel_to_patch_nodes, squared_embedding_distances
-from deepilg.solver import AMGContext, effective_resistance
+from ..solver import AMGContext, effective_resistance
+from .common import pixel_to_patch_nodes, squared_embedding_distances
 
 
 class ConductanceModel(eqx.Module):

@@ -18,10 +18,10 @@ from rasterio.transform import rowcol
 from rasterio.warp import calculate_default_transform, reproject
 from scipy.ndimage import convolve
 
-from deepilg.config import ExperimentConfig
-from deepilg.data import Coordinates, load_coordinates
-from deepilg.downloads import DownloadedProducts
-from deepilg.provenance import write_workflow_manifest
+from .config import ExperimentConfig
+from .data import Coordinates, load_coordinates
+from .downloads import DownloadedProducts
+from .provenance import write_workflow_manifest
 
 WORLDCOVER_CODES = (0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100)
 FEATURE_NAMES = (

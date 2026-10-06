@@ -11,10 +11,10 @@ from typing import Literal
 import numpy as np
 import rasterio
 
-from deepilg.config import ExperimentConfig
-from deepilg.data import discover_fst_regions, linearize_fst, load_fst_directory
-from deepilg.provenance import write_workflow_manifest
-from deepilg.splits import load_fold_assignments, pair_mask, upper_triangle
+from .config import ExperimentConfig
+from .data import discover_fst_regions, linearize_fst, load_fst_directory
+from .provenance import write_workflow_manifest
+from .splits import load_fold_assignments, pair_mask, upper_triangle
 
 
 def run_resistancega(

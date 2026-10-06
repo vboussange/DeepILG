@@ -6,8 +6,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
-from deepilg.models.base import ConductanceModel
-from deepilg.models.common import patchify
+from .base import ConductanceModel
+from .common import patchify
 
 
 class ResidualBlock(eqx.Module):

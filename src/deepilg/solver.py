@@ -3,32 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from numbers import Integral
 
 import jax
 import jax.numpy as jnp
 import lineax as lx
-import numpy as np
-from jax.experimental.sparse import BCOO
-from jaxscape import GridGraph
-from jaxscape.solvers import BCOOLinearOperator, batched_linear_solve
-from jaxscape.utils import graph_laplacian
+from jaxscape import GridGraph, ResistanceDistance
+from jaxscape.solvers import AMJaxCGSolver, AMJaxCGSolverState
+
+from .config import SolverConfig
+
+SOLVE_DTYPE = jnp.float64
 
 
 @dataclass(frozen=True)
 class AMGContext:
-    """Reusable AMJax algebraic-multigrid preconditioner.
-
-    The hierarchy is constructed from the unit-conductance graph.  Each solve
-    retains the current learned Laplacian as its operator; only the hierarchy
-    is reused.
-    """
+    """Shape-specific solver and optional reusable JAXScape preconditioner state."""
 
     graph_shape: tuple[int, int]
-    preconditioner: lx.AbstractLinearOperator
-    rtol: float
-    atol: float
-    max_steps: int
+    solver: lx.AbstractLinearSolver
+    solver_state: AMJaxCGSolverState | None = None
+
+
+def _mean_conductance(left: jax.Array, right: jax.Array) -> jax.Array:
+    """Use a stable edge callable so JAXScape can reuse compiled graph solves."""
+    return 0.5 * (left + right)
 
 
 def conductance_grid_graph(conductance: jax.Array) -> GridGraph:
@@ -36,16 +35,9 @@ def conductance_grid_graph(conductance: jax.Array) -> GridGraph:
     surface = jnp.asarray(conductance)
     if surface.ndim != 2:
         raise ValueError(f"Conductance surface must be two-dimensional, got {surface.shape}")
-    return GridGraph(surface, fun=lambda left, right: 0.5 * (left + right))
-
-
-def grounded_laplacian(conductance: jax.Array) -> BCOO:
-    """Return the Laplacian grounded at the last row-major graph vertex."""
-    surface = jnp.asarray(conductance)
     if surface.size < 2:
         raise ValueError("Effective resistance requires at least two graph vertices")
-    adjacency = conductance_grid_graph(surface).get_adjacency_matrix()
-    return graph_laplacian(adjacency)[:-1, :-1]
+    return GridGraph(surface, fun=_mean_conductance)
 
 
 def build_amg_context(
@@ -54,60 +46,41 @@ def build_amg_context(
     rtol: float = 1e-6,
     atol: float = 1e-6,
     max_steps: int = 1_000,
-    dtype: Any = jnp.float32,
 ) -> AMGContext:
-    """Build an AMJax preconditioner from a unit-conductance graph.
+    """Build a float64 AMJax-preconditioned CG context for a graph shape.
 
-    Hierarchy setup runs on the host and must therefore be called outside JIT
-    and gradient transformations.  AMJax performs the V-cycle on JAX arrays;
-    Lineax supplies CG and its implicit-differentiation rule.
+    Hierarchy setup runs on the host and must therefore be
+    called outside JIT and gradient transformations. The hierarchy is reused
+    only as a preconditioner; every solve retains the learned Laplacian as its
+    differentiable operator.
     """
-    if len(graph_shape) != 2 or any(int(size) <= 0 for size in graph_shape):
-        raise ValueError(f"Invalid graph shape: {graph_shape}")
-    if int(np.prod(graph_shape)) < 2:
-        raise ValueError("AMG requires at least two graph vertices")
-    if rtol < 0 or atol < 0 or max_steps <= 0:
-        raise ValueError("CG tolerances must be non-negative and max_steps positive")
-
-    try:
-        import pyamg
-        import scipy.sparse
-        from amjax import MultilevelSolver
-    except ImportError as error:
-        raise ImportError(
-            "AMG preconditioning requires the 'amjax' and 'pyamg' packages"
-        ) from error
-
-    template = grounded_laplacian(jnp.ones(graph_shape, dtype=dtype)).sum_duplicates()
-    indices = np.asarray(template.indices)
-    host_matrix = scipy.sparse.coo_matrix(
-        (np.asarray(template.data), (indices[:, 0], indices[:, 1])),
-        shape=template.shape,
-    ).tocsr()
-    host_hierarchy = pyamg.smoothed_aggregation_solver(host_matrix)
-    hierarchy = MultilevelSolver.from_pyamg(
-        host_hierarchy,
-        presmoother=("jacobi", {"iterations": 1, "omega": 1.0}),
-        postsmoother=("jacobi", {"iterations": 1, "omega": 1.0}),
-        coarse_solver="pinv",
-        dtype=dtype,
-    )
-    apply_v_cycle = hierarchy.aspreconditioner(cycle="V")
-    input_structure = BCOOLinearOperator(template).in_structure()
-    tags = (lx.positive_semidefinite_tag,)
-    if bool(hierarchy.symmetric_smoothing):
-        tags += (lx.symmetric_tag,)
-    operator = lx.FunctionLinearOperator(
-        lambda right_hand_side: apply_v_cycle(right_hand_side),
-        input_structure,
-        tags=tags,
-    )
+    _require_x64()
+    shape = _validate_graph_shape(graph_shape)
+    SolverConfig(rtol=rtol, atol=atol, max_steps=max_steps).validate()
+    template = conductance_grid_graph(jnp.ones(shape, dtype=SOLVE_DTYPE))
+    solver = AMJaxCGSolver(rtol=rtol, atol=atol, max_steps=max_steps, coarse_solver="pinv")
+    solver_state = ResistanceDistance(solver=solver).init_preconditioner(template)
     return AMGContext(
-        graph_shape=(int(graph_shape[0]), int(graph_shape[1])),
-        preconditioner=operator,
-        rtol=float(rtol),
-        atol=float(atol),
-        max_steps=int(max_steps),
+        graph_shape=shape,
+        solver=solver,
+        solver_state=solver_state,
+    )
+
+
+def build_cg_context(
+    graph_shape: tuple[int, int],
+    *,
+    rtol: float = 1e-6,
+    atol: float = 1e-6,
+    max_steps: int = 1_000,
+) -> AMGContext:
+    """Carry configured tolerances to the unpreconditioned float64 CG path."""
+    _require_x64()
+    shape = _validate_graph_shape(graph_shape)
+    SolverConfig(rtol=rtol, atol=atol, max_steps=max_steps, use_amg=False).validate()
+    return AMGContext(
+        graph_shape=shape,
+        solver=lx.CG(rtol=rtol, atol=atol, max_steps=max_steps),
     )
 
 
@@ -120,57 +93,57 @@ def effective_resistance(
     atol: float = 1e-6,
     max_steps: int = 1_000,
 ) -> jax.Array:
-    """Compute all pairwise terminal effective resistances.
+    """Compute all pairwise terminal effective resistances in float64.
 
     One grounded Laplacian system is solved per terminal.  The final graph
     vertex is the reference vertex; its right-hand side is represented by the
-    zero vector, so terminals are allowed to coincide with it.
+    zero vector, so terminals are allowed to coincide with it. The conductance
+    model may remain float32: its surface is promoted at the solve boundary and
+    the resulting distance matrix is cast back to the input dtype.
     """
-    surface = jnp.asarray(conductance)
+    _require_x64()
+    input_surface = jnp.asarray(conductance)
+    if not jnp.issubdtype(input_surface.dtype, jnp.floating):
+        raise TypeError("conductance must have a real floating dtype")
+    output_dtype = input_surface.dtype
+    surface = jnp.asarray(input_surface, dtype=SOLVE_DTYPE)
     nodes = jnp.asarray(terminal_nodes, dtype=jnp.int32)
     if nodes.ndim != 1:
         raise ValueError(f"terminal_nodes must be one-dimensional, got {nodes.shape}")
     if nodes.shape[0] == 0:
         raise ValueError("At least one terminal node is required")
     if context is not None and tuple(surface.shape) != context.graph_shape:
-        raise ValueError(f"AMG context shape {context.graph_shape} does not match {surface.shape}")
+        raise ValueError(
+            f"Solver context shape {context.graph_shape} does not match {surface.shape}"
+        )
 
-    laplacian = grounded_laplacian(surface)
-    right_hand_sides = jax.nn.one_hot(nodes, laplacian.shape[0], dtype=laplacian.dtype).T
     if context is None:
-        solver = lx.CG(rtol=rtol, atol=atol, max_steps=max_steps)
-        potentials = batched_linear_solve(laplacian, right_hand_sides, solver)
-    else:
-        solver = lx.CG(
-            rtol=context.rtol,
-            atol=context.atol,
-            max_steps=context.max_steps,
-        )
-        potentials = batched_linear_solve(
-            laplacian,
-            right_hand_sides,
-            solver,
-            options={"preconditioner": context.preconditioner},
-        )
-
-    gram = right_hand_sides.T @ potentials
-    diagonal = jnp.diag(gram)
-    resistance = diagonal[:, None] + diagonal[None, :] - gram - gram.T
-    resistance = 0.5 * (resistance + resistance.T)
+        context = build_cg_context(surface.shape, rtol=rtol, atol=atol, max_steps=max_steps)
+    graph = conductance_grid_graph(surface)
+    resistance = ResistanceDistance(solver=context.solver).nodes_to_nodes_distance(
+        graph, nodes, state=context.solver_state
+    )
     diagonal_indices = jnp.diag_indices(resistance.shape[0])
-    return resistance.at[diagonal_indices].set(0.0)
+    resistance = resistance.at[diagonal_indices].set(0.0)
+    return jnp.asarray(resistance, dtype=output_dtype)
 
 
-def dense_effective_resistance(conductance: np.ndarray, terminal_nodes: np.ndarray) -> np.ndarray:
-    """Small-graph reference implementation used for numerical verification."""
-    surface = jnp.asarray(conductance, dtype=jnp.float64)
-    laplacian = np.asarray(grounded_laplacian(surface).todense())
-    nodes = np.asarray(terminal_nodes, dtype=np.int64)
-    basis = np.asarray(jax.nn.one_hot(nodes, laplacian.shape[0], dtype=surface.dtype)).T
-    potentials = np.linalg.solve(laplacian, basis)
-    gram = basis.T @ potentials
-    diagonal = np.diag(gram)
-    result = diagonal[:, None] + diagonal[None, :] - gram - gram.T
-    result = 0.5 * (result + result.T)
-    np.fill_diagonal(result, 0.0)
-    return result
+def _require_x64() -> None:
+    """Reject silent float64 truncation before constructing solver arrays."""
+    if not bool(jax.config.x64_enabled):
+        raise RuntimeError(
+            "Effective-resistance solves require float64. Set JAX_ENABLE_X64=true "
+            "before starting Python."
+        )
+
+
+def _validate_graph_shape(graph_shape: tuple[int, int]) -> tuple[int, int]:
+    if len(graph_shape) != 2 or any(
+        isinstance(size, bool) or not isinstance(size, Integral) or size <= 0
+        for size in graph_shape
+    ):
+        raise ValueError(f"Invalid graph shape: {graph_shape}")
+    shape = (int(graph_shape[0]), int(graph_shape[1]))
+    if shape[0] * shape[1] < 2:
+        raise ValueError("Effective resistance requires at least two graph vertices")
+    return shape

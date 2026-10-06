@@ -12,8 +12,8 @@ from typing import Any
 import requests
 from shapely.geometry import LineString, mapping
 
-from deepilg.config import ExperimentConfig
-from deepilg.data import Coordinates, load_coordinates
+from .config import ExperimentConfig
+from .data import Coordinates, load_coordinates
 
 PLANETARY_COMPUTER_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
 USGS_3DEP_EXPORT = (

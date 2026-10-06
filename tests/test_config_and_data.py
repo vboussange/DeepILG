@@ -74,6 +74,38 @@ def test_config_rejects_unknown_keys(tmp_path: Path) -> None:
         load_config(source)
 
 
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        ("rtol = nan", "rtol must be finite"),
+        ("rtol = true", "rtol must be finite"),
+        ("atol = inf", "atol must be finite"),
+        ("rtol = 0\natol = 0", "At least one solver tolerance"),
+        ("max_steps = 1.5", "max_steps must be a positive integer"),
+        ("use_amg = 1", "use_amg must be a boolean"),
+    ],
+)
+def test_config_rejects_invalid_solver_tolerances(
+    tmp_path: Path, replacement: str, message: str
+) -> None:
+    source = tmp_path / "configs" / "demo.toml"
+    _write_config(source)
+    text = source.read_text(encoding="utf-8")
+    if replacement.startswith("rtol = 0"):
+        text = text.replace("rtol = 1e-6\natol = 1e-6", replacement)
+    elif replacement.startswith("max_steps"):
+        text = text.replace("max_steps = 100", replacement)
+    elif replacement.startswith("use_amg"):
+        text = text.replace("use_amg = true", replacement)
+    else:
+        key = replacement.split(" =", maxsplit=1)[0]
+        text = text.replace(f"{key} = 1e-6", replacement)
+    source.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_config(source)
+
+
 def test_fst_loader_accepts_only_missing_diagonal(tmp_path: Path) -> None:
     source = tmp_path / "CWMA_FST.csv"
     source.write_text(

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from deepilg.config import ExperimentConfig
+from .config import ExperimentConfig
 
 MANIFEST_NAME = "workflow_manifest.json"
 

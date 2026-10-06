@@ -7,21 +7,21 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-from deepilg import __version__
-from deepilg.config import ExperimentConfig, load_config
-from deepilg.data import (
+from . import __version__
+from .config import ExperimentConfig, load_config
+from .data import (
     load_coordinates,
     load_fst_directory,
     validate_population_alignment,
 )
-from deepilg.downloads import DownloadedProducts, download_public_products
-from deepilg.evaluation import evaluate_model
-from deepilg.figures import benchmark_figure, resistance_surface_figure
-from deepilg.preprocessing import preprocess_downloaded_products
-from deepilg.provenance import require_publication_safe_manifest
-from deepilg.resistancega import export_resistancega_inputs, run_resistancega
-from deepilg.splits import load_fold_assignments, validate_fold_assignments
-from deepilg.training import fit_reference_model, train_neural_model
+from .downloads import DownloadedProducts, download_public_products
+from .evaluation import evaluate_model
+from .figures import benchmark_figure, resistance_surface_figure
+from .preprocessing import preprocess_downloaded_products
+from .provenance import require_publication_safe_manifest
+from .resistancega import export_resistancega_inputs, run_resistancega
+from .splits import load_fold_assignments, validate_fold_assignments
+from .training import fit_reference_model, train_neural_model
 
 
 def build_parser() -> argparse.ArgumentParser:

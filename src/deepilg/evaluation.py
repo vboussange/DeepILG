@@ -12,12 +12,12 @@ import equinox as eqx
 import jax
 import numpy as np
 
-from deepilg.config import ExperimentConfig
-from deepilg.metrics import FoldMetrics, evaluate_fold
-from deepilg.models import ConductanceModel, EmbeddingDistanceModel, GeographicDistanceModel
-from deepilg.provenance import write_workflow_manifest
-from deepilg.splits import upper_triangle
-from deepilg.training import (
+from .config import ExperimentConfig
+from .metrics import FoldMetrics, evaluate_fold
+from .models import ConductanceModel, EmbeddingDistanceModel, GeographicDistanceModel
+from .provenance import write_workflow_manifest
+from .splits import upper_triangle
+from .training import (
     build_solver_contexts,
     initialise_model,
     load_fold_batches,

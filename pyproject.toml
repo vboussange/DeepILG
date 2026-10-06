@@ -16,18 +16,15 @@ classifiers = [
   "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-  "amjax==0.0.3",
   "equinox>=0.13.2,<0.14",
   "geopandas>=1.1.1,<2",
   "jax>=0.10.0,<0.11",
-  # The lock resolves JAXScape against base JAX; CUDA remains opt-in below.
-  "jaxscape==0.0.9",
+  "jaxscape[amjax]==0.0.10",
   "lineax>=0.1.0,<0.2",
   "matplotlib>=3.10.3,<4",
   "numpy>=2.2.6,<3",
   "optax>=0.2.8,<0.3",
   "planetary-computer>=1.0.0,<2",
-  "pyamg>=5.3,<6",
   "rasterio>=1.4,<2",
   "requests>=2.32,<3",
   "scipy>=1.15,<2",
@@ -37,6 +34,8 @@ dependencies = [
 [project.optional-dependencies]
 gpu = [
   "jax[cuda]>=0.10.0,<0.11; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  # Newer cuDNN 9 wheels require a newer driver than the manuscript V100 nodes.
+  "nvidia-cudnn-cu12==9.8.0.87; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
 
 [dependency-groups]

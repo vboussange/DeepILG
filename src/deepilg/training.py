@@ -15,20 +15,33 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from deepilg.config import ExperimentConfig
-from deepilg.data import FSTMatrix, linearize_fst, load_fst_directory
-from deepilg.loss import region_balanced_log1p_mse
-from deepilg.models import (
+from .config import ExperimentConfig
+from .data import FSTMatrix, linearize_fst, load_fst_directory
+from .loss import region_balanced_log1p_mse
+from .models import (
     ConductanceModel,
     EmbeddingDistanceModel,
     GeographicDistanceModel,
     ResNet9Conductance,
     UNetEmbeddingDistance,
 )
-from deepilg.preprocessing import FEATURE_NAMES, ProcessedRegion, validate_processed_region
-from deepilg.provenance import write_workflow_manifest
-from deepilg.solver import AMGContext, build_amg_context
-from deepilg.splits import FoldAssignments, load_fold_assignments, pair_mask, upper_triangle
+from .preprocessing import (
+    FEATURE_NAMES,
+    ProcessedRegion,
+    validate_processed_region,
+)
+from .provenance import write_workflow_manifest
+from .solver import (
+    AMGContext,
+    build_amg_context,
+    build_cg_context,
+)
+from .splits import (
+    FoldAssignments,
+    load_fold_assignments,
+    pair_mask,
+    upper_triangle,
+)
 
 ModelName = Literal["reference", "resnet9", "unet"]
 Partition = Literal["train", "validation", "test"]
@@ -195,8 +208,8 @@ def build_solver_contexts(
     batches: Sequence[RegionBatch],
     config: ExperimentConfig,
 ) -> dict[str, AMGContext]:
-    """Build one shape-specific unit-conductance AMG hierarchy per region."""
-    if not isinstance(model, ConductanceModel) or not config.solver.use_amg:
+    """Build one shape-specific resistance-solver context per region."""
+    if not isinstance(model, ConductanceModel):
         return {}
     contexts = {}
     for batch in batches:
@@ -204,12 +217,12 @@ def build_solver_contexts(
             batch.features.shape[0] // model.patch_size,
             batch.features.shape[1] // model.patch_size,
         )
-        contexts[batch.region] = build_amg_context(
+        builder = build_amg_context if config.solver.use_amg else build_cg_context
+        contexts[batch.region] = builder(
             shape,
             rtol=config.solver.rtol,
             atol=config.solver.atol,
             max_steps=config.solver.max_steps,
-            dtype=batch.features.dtype,
         )
     return contexts
 
