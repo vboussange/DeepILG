@@ -17,7 +17,7 @@ import optax
 
 from .config import ExperimentConfig
 from .data import FSTMatrix, linearize_fst, load_fst_directory
-from .loss import region_balanced_log1p_mse
+from .loss import log1p_mse
 from .models import (
     ConductanceModel,
     EmbeddingDistanceModel,
@@ -252,6 +252,25 @@ def predict_matrix(
     )
 
 
+def _region_objective(
+    model: ResNet9Conductance | UNetEmbeddingDistance,
+    batch: RegionBatch,
+    *,
+    partition: Partition,
+    context: AMGContext | None,
+    inference: bool,
+    key: jax.Array,
+) -> jax.Array:
+    """Compute one region's masked loss using its already-split random key."""
+    matrix = predict_matrix(model, batch, context=context, inference=inference, key=key)
+    row, column = jnp.triu_indices(matrix.shape[0], k=1)
+    selected = batch.masks[partition]
+    return log1p_mse(matrix[row, column][selected], batch.targets[row, column][selected])
+
+
+_region_value_and_grad = eqx.filter_value_and_grad(_region_objective)
+
+
 def objective(
     model: ResNet9Conductance | UNetEmbeddingDistance,
     batches: Sequence[RegionBatch],
@@ -262,22 +281,61 @@ def objective(
     key: jax.Array,
 ) -> jax.Array:
     """Compute the equally region-weighted objective for a data partition."""
+    if not batches:
+        raise ValueError("At least one geographic region is required")
     keys = jax.random.split(key, len(batches))
-    predictions = {}
-    targets = {}
-    for batch, region_key in zip(batches, keys, strict=True):
-        matrix = predict_matrix(
+    losses = [
+        _region_objective(
             model,
             batch,
+            partition=partition,
             context=contexts.get(batch.region),
             inference=inference,
             key=region_key,
         )
-        row, column = jnp.triu_indices(matrix.shape[0], k=1)
-        selected = batch.masks[partition]
-        predictions[batch.region] = matrix[row, column][selected]
-        targets[batch.region] = batch.targets[row, column][selected]
-    return region_balanced_log1p_mse(predictions, targets)
+        for batch, region_key in zip(batches, keys, strict=True)
+    ]
+    return jnp.mean(jnp.stack(losses))
+
+
+def objective_value_and_grad(
+    model: ResNet9Conductance | UNetEmbeddingDistance,
+    batches: Sequence[RegionBatch],
+    *,
+    partition: Partition,
+    contexts: Mapping[str, AMGContext],
+    inference: bool,
+    key: jax.Array,
+) -> tuple[jax.Array, ResNet9Conductance | UNetEmbeddingDistance]:
+    """Average regional gradients without retaining several regions' activations.
+
+    Keep this loop outside JIT so each regional backward pass finishes before
+    starting the next. The caller applies the averaged gradient in one update.
+    """
+    if not batches:
+        raise ValueError("At least one geographic region is required")
+    keys = jax.random.split(key, len(batches))
+    losses = []
+    gradients = None
+    for batch, region_key in zip(batches, keys, strict=True):
+        loss, region_gradients = jax.block_until_ready(
+            _region_value_and_grad(
+                model,
+                batch,
+                partition=partition,
+                context=contexts.get(batch.region),
+                inference=inference,
+                key=region_key,
+            )
+        )
+        losses.append(loss)
+        gradients = (
+            region_gradients
+            if gradients is None
+            else jax.tree.map(jnp.add, gradients, region_gradients)
+        )
+    gradients = jax.tree.map(lambda gradient: gradient / len(batches), gradients)
+    return jnp.mean(jnp.stack(losses)), gradients
 
 
 def train_neural_model(
@@ -337,11 +395,10 @@ def train_neural_model(
         current_learning_rate = float(state["learning_rate"])
 
     contexts = build_solver_contexts(model, batches, config)
-    value_and_grad = eqx.filter_value_and_grad(objective)
     epochs_completed = start_epoch
     for epoch in range(start_epoch, config.training.epochs):
         key, train_key, validation_key = jax.random.split(key, 3)
-        loss, gradients = value_and_grad(
+        loss, gradients = objective_value_and_grad(
             model,
             batches,
             partition="train",

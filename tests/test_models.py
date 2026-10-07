@@ -1,5 +1,6 @@
 """Shape and patch-node invariants for the neural encoders."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -65,6 +66,31 @@ def test_resnet9_returns_positive_patch_conductances() -> None:
         model(jnp.ones((8, 8, 14), dtype=jnp.float32), patch_batch_size=3),
         rtol=1e-6,
     )
+
+
+@pytest.mark.parametrize("batch_size", [1, 4])
+def test_checkpointed_patch_batches_preserve_outputs_and_gradients(batch_size: int) -> None:
+    model = ResNet9Conductance(in_channels=2, patch_size=4, key=jax.random.PRNGKey(10))
+    features = jax.random.normal(jax.random.PRNGKey(11), (8, 12, 2), dtype=jnp.float32)
+
+    def reference(model_and_features):
+        encoder, raster = model_and_features
+        patches, shape = patchify(raster, encoder.patch_size)
+        return jax.vmap(encoder.encode_patch)(patches).reshape(shape)
+
+    def checkpointed(model_and_features):
+        encoder, raster = model_and_features
+        return encoder.conductance(raster, patch_batch_size=batch_size)
+
+    arguments = (model, features)
+    np.testing.assert_allclose(checkpointed(arguments), reference(arguments), rtol=1e-5)
+    reference_gradients = eqx.filter_grad(lambda args: jnp.sum(reference(args)))(arguments)
+    gradients = eqx.filter_grad(lambda args: jnp.sum(checkpointed(args)))(arguments)
+    for actual, expected in zip(
+        jax.tree.leaves(gradients), jax.tree.leaves(reference_gradients), strict=True
+    ):
+        assert actual.dtype == expected.dtype
+        np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=2e-5)
 
 
 def test_unet_has_global_grid_output_and_zero_shared_patch_distance() -> None:

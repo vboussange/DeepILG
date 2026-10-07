@@ -85,6 +85,11 @@ uv run deepilg validate --config configs/benchmark.toml
 
 Fit and score the pipeline models on every fold:
 
+Neural training computes gradients one region at a time, averages them equally,
+and takes one optimizer step per epoch. ResNet9 also checkpoints each patch batch,
+recomputing CNN activations during backpropagation; lowering
+`training.patch_batch_size` reduces activation memory at the cost of throughput.
+
 ```bash
 for fold in 0 1 2 3 4; do
   for model in reference unet; do

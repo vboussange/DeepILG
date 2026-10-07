@@ -10,6 +10,12 @@ from .base import ConductanceModel
 from .common import patchify
 
 
+@eqx.filter_checkpoint
+def _encode_patch_batch(model: ResNet9Conductance, patches: jax.Array) -> jax.Array:
+    """Recompute CNN activations in the backward pass instead of retaining them."""
+    return jax.vmap(model.encode_patch)(patches)
+
+
 class ResidualBlock(eqx.Module):
     """Two convolutions with GroupNorm and an identity skip connection."""
 
@@ -82,7 +88,7 @@ class ResNet9Conductance(ConductanceModel):
         if batch_size <= 0:
             raise ValueError("patch_batch_size must be positive")
         chunks = [
-            jax.vmap(self.encode_patch)(patches[start : start + batch_size])
+            _encode_patch_batch(self, patches[start : start + batch_size])
             for start in range(0, patches.shape[0], batch_size)
         ]
         conductance = jnp.concatenate(chunks)
