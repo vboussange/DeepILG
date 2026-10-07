@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -47,18 +47,19 @@ ModelName = Literal["reference", "resnet9", "unet"]
 Partition = Literal["train", "validation", "test"]
 
 
+@jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class RegionBatch:
     """Model inputs and population-level split masks for one region."""
 
-    region: str
-    population_ids: tuple[str, ...]
+    region: str = field(metadata={"static": True})
+    population_ids: tuple[str, ...] = field(metadata={"static": True})
     features: jax.Array
     pixel_nodes: jax.Array
     targets: jax.Array
     masks: Mapping[str, jax.Array]
-    resolution_m: float
-    patch_batch_size: int
+    resolution_m: float = field(metadata={"static": True})
+    patch_batch_size: int | None = field(default=None, metadata={"static": True})
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,7 @@ def _load_region_batch(
     fold: int,
     resolution_m: float,
     patch_size: int,
-    patch_batch_size: int,
+    patch_batch_size: int | None,
     geolocation_status: str,
     scientific_use: bool,
 ) -> RegionBatch:
@@ -255,20 +256,26 @@ def predict_matrix(
 def _region_objective(
     model: ResNet9Conductance | UNetEmbeddingDistance,
     batch: RegionBatch,
+    selected_pairs: jax.Array,
     *,
-    partition: Partition,
     context: AMGContext | None,
     inference: bool,
     key: jax.Array,
 ) -> jax.Array:
-    """Compute one region's masked loss using its already-split random key."""
+    """Compute one region's loss using fixed-length integer pair indices."""
     matrix = predict_matrix(model, batch, context=context, inference=inference, key=key)
     row, column = jnp.triu_indices(matrix.shape[0], k=1)
-    selected = batch.masks[partition]
-    return log1p_mse(matrix[row, column][selected], batch.targets[row, column][selected])
+    row, column = row[selected_pairs], column[selected_pairs]
+    return log1p_mse(matrix[row, column], batch.targets[row, column])
 
 
-_region_value_and_grad = eqx.filter_value_and_grad(_region_objective)
+_region_loss = eqx.filter_jit(_region_objective)
+_region_value_and_grad = eqx.filter_jit(eqx.filter_value_and_grad(_region_objective))
+
+
+def _selected_pairs(batch: RegionBatch, partition: Partition) -> jax.Array:
+    """Prepare indices on the host without changing the public Boolean masks."""
+    return jnp.asarray(np.flatnonzero(np.asarray(batch.masks[partition])), dtype=jnp.int32)
 
 
 def objective(
@@ -285,10 +292,10 @@ def objective(
         raise ValueError("At least one geographic region is required")
     keys = jax.random.split(key, len(batches))
     losses = [
-        _region_objective(
+        _region_loss(
             model,
             batch,
-            partition=partition,
+            _selected_pairs(batch, partition),
             context=contexts.get(batch.region),
             inference=inference,
             key=region_key,
@@ -309,8 +316,9 @@ def objective_value_and_grad(
 ) -> tuple[jax.Array, ResNet9Conductance | UNetEmbeddingDistance]:
     """Average regional gradients without retaining several regions' activations.
 
-    Keep this loop outside JIT so each regional backward pass finishes before
-    starting the next. The caller applies the averaged gradient in one update.
+    Compile each regional loss-and-gradient calculation, but keep this loop
+    outside JIT so each backward pass finishes before starting the next region.
+    The caller applies the averaged gradient in one update.
     """
     if not batches:
         raise ValueError("At least one geographic region is required")
@@ -322,7 +330,7 @@ def objective_value_and_grad(
             _region_value_and_grad(
                 model,
                 batch,
-                partition=partition,
+                _selected_pairs(batch, partition),
                 context=contexts.get(batch.region),
                 inference=inference,
                 key=region_key,

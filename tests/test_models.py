@@ -68,8 +68,8 @@ def test_resnet9_returns_positive_patch_conductances() -> None:
     )
 
 
-@pytest.mark.parametrize("batch_size", [1, 4])
-def test_checkpointed_patch_batches_preserve_outputs_and_gradients(batch_size: int) -> None:
+@pytest.mark.parametrize("batch_size", [None, 1, 4, 16])
+def test_checkpointed_patch_batches_preserve_outputs_and_gradients(batch_size) -> None:
     model = ResNet9Conductance(in_channels=2, patch_size=4, key=jax.random.PRNGKey(10))
     features = jax.random.normal(jax.random.PRNGKey(11), (8, 12, 2), dtype=jnp.float32)
 
@@ -91,6 +91,40 @@ def test_checkpointed_patch_batches_preserve_outputs_and_gradients(batch_size: i
     ):
         assert actual.dtype == expected.dtype
         np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=2e-5)
+
+
+@pytest.mark.parametrize("batch_size", [None, 4, 16])
+def test_patch_batch_size_selects_checkpointing_even_for_one_chunk(batch_size) -> None:
+    model = ResNet9Conductance(in_channels=2, patch_size=4, key=jax.random.PRNGKey(10))
+    features = jnp.ones((8, 12, 2), dtype=jnp.float32)
+    jaxpr, _, _ = eqx.filter_make_jaxpr(
+        lambda encoder: encoder.conductance(features, patch_batch_size=batch_size)
+    )(model)
+    assert ("remat" in str(jaxpr)) == (batch_size is not None)
+
+
+def test_checkpointed_chunks_use_a_compiled_loop_instead_of_unrolling() -> None:
+    model = ResNet9Conductance(in_channels=2, patch_size=4, key=jax.random.PRNGKey(10))
+    equation_counts = []
+    for side in (8, 32):
+        features = jnp.ones((side, side, 2), dtype=jnp.float32)
+        jaxpr, _, _ = eqx.filter_make_jaxpr(
+            lambda encoder, raster: encoder.conductance(raster, patch_batch_size=2)
+        )(model, features)
+        assert "scan[" in str(jaxpr)
+        equation_counts.append(len(jaxpr.jaxpr.eqns))
+    assert equation_counts[0] == equation_counts[1]
+
+
+@pytest.mark.parametrize("value", [0, -1, True, False, 1.5, "32"])
+def test_encoders_reject_invalid_patch_batch_sizes(value) -> None:
+    key = jax.random.PRNGKey(1)
+    resnet_model = ResNet9Conductance(in_channels=2, patch_size=4, key=key)
+    unet_model = UNetEmbeddingDistance(in_channels=2, patch_size=4, key=key)
+    features = jnp.ones((8, 8, 2), dtype=jnp.float32)
+    for function in (resnet_model.conductance, unet_model.embedding_grid):
+        with pytest.raises(ValueError, match="patch_batch_size must be None or a positive integer"):
+            function(features, patch_batch_size=value)
 
 
 def test_unet_has_global_grid_output_and_zero_shared_patch_distance() -> None:

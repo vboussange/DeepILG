@@ -37,8 +37,10 @@ lr_factor = 0.5
 min_learning_rate = 0.000001
 # AdamW regularization shared by both neural architectures.
 weight_decay = 0.0001
-# Encode at most 32 patches at once to bound accelerator memory.
-patch_batch_size = 32
+# Omit to encode each full region without ResNet9 activation checkpointing.
+# Uncomment to checkpoint ResNet9 chunks (also when all patches fit in one chunk).
+# U-Net only chunks its initial linear embedding; see README for memory semantics.
+# patch_batch_size = 32
 
 [solver]
 # Conjugate-gradient tolerances and iteration cap for grounded Laplacian systems.

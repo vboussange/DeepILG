@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numbers import Integral
 
 import jax
@@ -16,11 +16,16 @@ from .config import SolverConfig
 SOLVE_DTYPE = jnp.float64
 
 
+@jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class AMGContext:
-    """Shape-specific solver and optional reusable JAXScape preconditioner state."""
+    """Solver context with dynamic hierarchy arrays and a static graph shape.
 
-    graph_shape: tuple[int, int]
+    The reusable JAXScape state remains a PyTree input, not a compiled constant.
+    Construct it on the host before compiling regional predictions or losses.
+    """
+
+    graph_shape: tuple[int, int] = field(metadata={"static": True})
     solver: lx.AbstractLinearSolver
     solver_state: AMJaxCGSolverState | None = None
 

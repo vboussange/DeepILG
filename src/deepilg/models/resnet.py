@@ -6,14 +6,15 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from ..config import validate_patch_batch_size
 from .base import ConductanceModel
 from .common import patchify
 
 
 @eqx.filter_checkpoint
-def _encode_patch_batch(model: ResNet9Conductance, patches: jax.Array) -> jax.Array:
+def _encode_patch(model: ResNet9Conductance, patch: jax.Array) -> jax.Array:
     """Recompute CNN activations in the backward pass instead of retaining them."""
-    return jax.vmap(model.encode_patch)(patches)
+    return model.encode_patch(patch)
 
 
 class ResidualBlock(eqx.Module):
@@ -82,16 +83,21 @@ class ResNet9Conductance(ConductanceModel):
         return jnp.clip(jnp.exp(self.output(values).squeeze()) + 1e-2, 1e-2, 1e3)
 
     def conductance(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:
-        """Return the patch-grid conductance surface for one HWC raster."""
+        """Return the patch-grid conductance surface for one HWC raster.
+
+        None encodes the complete region without checkpointing. A positive
+        integer checkpoints every encoder chunk, even if all patches fit in one
+        chunk, trading backward recomputation for lower activation memory.
+        """
+        validate_patch_batch_size(patch_batch_size)
         patches, grid_shape = patchify(features, self.patch_size)
-        batch_size = patches.shape[0] if patch_batch_size is None else patch_batch_size
-        if batch_size <= 0:
-            raise ValueError("patch_batch_size must be positive")
-        chunks = [
-            _encode_patch_batch(self, patches[start : start + batch_size])
-            for start in range(0, patches.shape[0], batch_size)
-        ]
-        conductance = jnp.concatenate(chunks)
+        if patch_batch_size is None:
+            return jax.vmap(self.encode_patch)(patches).reshape(grid_shape)
+        # lax.map batches with vmap inside a compiled loop, including a ragged
+        # final chunk. This avoids unrolling one CNN graph per chunk under JIT.
+        conductance = jax.lax.map(
+            lambda patch: _encode_patch(self, patch), patches, batch_size=patch_batch_size
+        )
         return conductance.reshape(grid_shape)
 
     def __call__(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:

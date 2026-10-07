@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from deepilg.config import load_config
+from deepilg.config import TrainingConfig, load_config
 from deepilg.data import discover_fst_regions, linearize_fst, load_fst_csv, validate_fst_matrix
 
 
@@ -71,6 +71,35 @@ def test_config_rejects_unknown_keys(tmp_path: Path) -> None:
     )
     source.write_text(text, encoding="utf-8")
     with pytest.raises(ValueError, match="Unknown keys"):
+        load_config(source)
+
+
+def test_omitted_patch_batch_size_means_full_region(tmp_path: Path) -> None:
+    source = tmp_path / "configs" / "demo.toml"
+    _write_config(source)
+    source.write_text(
+        source.read_text(encoding="utf-8").replace("patch_batch_size = 8\n", ""),
+        encoding="utf-8",
+    )
+    assert load_config(source).training.patch_batch_size is None
+    assert TrainingConfig().patch_batch_size is None
+    assert TrainingConfig(patch_batch_size=None).patch_batch_size is None
+    assert TrainingConfig(patch_batch_size=8).patch_batch_size == 8
+    assert load_config("configs/demo.toml").training.patch_batch_size is None
+    assert load_config("configs/benchmark.toml").training.patch_batch_size is None
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", "false", "1.5", '"32"'])
+def test_config_rejects_invalid_patch_batch_sizes(tmp_path: Path, value: str) -> None:
+    source = tmp_path / "configs" / "demo.toml"
+    _write_config(source)
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "patch_batch_size = 8", f"patch_batch_size = {value}"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="patch_batch_size must be None or a positive integer"):
         load_config(source)
 
 

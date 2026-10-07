@@ -51,10 +51,22 @@ class TrainingConfig:
     resnet9_learning_rate: float = 1e-4
     unet_learning_rate: float = 1e-3
     weight_decay: float = 1e-4
-    patch_batch_size: int = 256
+    patch_batch_size: int | None = None
     lr_patience: int = 20
     lr_factor: float = 0.5
     min_learning_rate: float = 1e-6
+
+    def __post_init__(self) -> None:
+        """Validate the optional patch-chunk/checkpointing policy."""
+        validate_patch_batch_size(self.patch_batch_size)
+
+
+def validate_patch_batch_size(value: int | None) -> None:
+    """Accept full-region encoding (None) or a positive integer chunk size."""
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, Integral) or value <= 0
+    ):
+        raise ValueError("patch_batch_size must be None or a positive integer")
 
 
 @dataclass(frozen=True)
@@ -164,8 +176,6 @@ def _validate(config: ExperimentConfig) -> None:
         or config.training.weight_decay < 0
     ):
         raise ValueError("learning rates must be positive and weight_decay non-negative")
-    if config.training.patch_batch_size <= 0:
-        raise ValueError("patch_batch_size must be positive")
     if not 0 < config.training.lr_factor < 1:
         raise ValueError("lr_factor must lie strictly between zero and one")
     if config.training.min_learning_rate <= 0:

@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 
+from ..config import validate_patch_batch_size
 from .base import EmbeddingDistanceModel
 from .common import patchify
 
@@ -180,7 +181,12 @@ class UNetEmbeddingDistance(EmbeddingDistanceModel):
         key: jax.Array | None = None,
         patch_batch_size: int | None = None,
     ) -> jax.Array:
-        """Return an ``(patch rows, patch columns, embedding_dim)`` tensor."""
+        """Return an ``(patch rows, patch columns, embedding_dim)`` tensor.
+
+        patch_batch_size only chunks the linear patch embedding; it does not
+        checkpoint or split the subsequent spatial U-Net computation.
+        """
+        validate_patch_batch_size(patch_batch_size)
         if not inference and key is None:
             raise ValueError("Training-mode U-Net evaluation requires a PRNG key")
         patches, grid_shape = patchify(features, self.patch_size)
@@ -189,8 +195,6 @@ class UNetEmbeddingDistance(EmbeddingDistanceModel):
             dtype=self.patch_embedding.weight.dtype,
         )
         batch_size = flattened.shape[0] if patch_batch_size is None else patch_batch_size
-        if batch_size <= 0:
-            raise ValueError("patch_batch_size must be positive")
         embedded = jnp.concatenate(
             [
                 jax.vmap(self.patch_embedding)(flattened[start : start + batch_size])

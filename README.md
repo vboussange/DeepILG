@@ -85,10 +85,46 @@ uv run deepilg validate --config configs/benchmark.toml
 
 Fit and score the pipeline models on every fold:
 
-Neural training computes gradients one region at a time, averages them equally,
-and takes one optimizer step per epoch. ResNet9 also checkpoints each patch batch,
-recomputing CNN activations during backpropagation; lowering
-`training.patch_batch_size` reduces activation memory at the cost of throughput.
+Neural training compiles each region's loss and gradient computation together,
+finishes that region's backward pass before starting the next, averages regional
+gradients equally, and takes one optimizer step per epoch. Validation losses are
+also compiled per region. Compilation happens on first use for each input shape
+and execution mode, then the compiled programs are reused as weights and random
+keys change. AMG hierarchy setup, logging, and checkpoint-file writes stay outside
+the compiled calculations.
+
+#### Patch encoding and memory
+
+The optional `[training]` setting `patch_batch_size` controls **ResNet9 encoder
+chunking and activation checkpointing together**:
+
+- **Omitted** (Python API: `None`, the default): encode all patches of one region
+  in one call, without activation checkpointing. Start here when the region fits
+  in GPU memory.
+- **Positive integer**, for example `patch_batch_size = 32`: encode at most that
+  many patches per chunk and checkpoint every chunk, recomputing CNN activations
+  during backpropagation to save memory. A compiled loop handles the chunks and
+  any smaller final chunk without unrolling a separate CNN graph for each.
+  Checkpointing remains enabled even when the value exceeds the region's patch count.
+
+The supplied demo and benchmark configurations omit this setting. To opt into
+memory-saving execution, uncomment their `patch_batch_size = 32` example. TOML
+has no `None`/`null` value: remove or comment out the setting to disable chunking
+and checkpointing again. Zero, negative values, booleans, and non-integers are
+rejected. Existing configurations with an explicit positive value continue to
+use checkpointed chunks.
+
+This setting does **not** change the spatial `[preprocessing].patch_size` (32×32
+pixels by default), split the resistance graph, or introduce extra optimizer
+updates. The complete regional graph is still needed for its loss. Smaller
+checkpointed chunks can reduce peak activation memory, but cost recomputation
+and may reduce throughput; measure on your own GPU and region sizes. Sequential
+regional gradient accumulation is retained in both modes. Activation
+checkpointing is unrelated to saving model checkpoints for resume/evaluation.
+
+For **U-Net**, `patch_batch_size` only chunks its initial linear patch embedding;
+it does not enable activation checkpointing or divide the spatial U-Net pass,
+which still processes the complete region's patch grid.
 
 ```bash
 for fold in 0 1 2 3 4; do
