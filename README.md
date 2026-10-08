@@ -93,6 +93,12 @@ and execution mode, then the compiled programs are reused as weights and random
 keys change. AMG hierarchy setup, logging, and checkpoint-file writes stay outside
 the compiled calculations.
 
+After `lr_patience` consecutive epochs without validation improvement, training
+reduces the learning rate by `lr_factor` down to `min_learning_rate`. Every actual
+reduction also restarts AdamW's step counter and accumulated moments at the current
+model parameters. The restarted optimizer state is written to `latest.eqx`, so `--resume` continues across a
+reduction exactly as an uninterrupted run would.
+
 #### Patch encoding and memory
 
 The optional `[training]` setting `patch_batch_size` controls **ResNet9 encoder

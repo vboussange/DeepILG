@@ -353,7 +353,11 @@ def train_neural_model(
     fold: int,
     resume: bool = False,
 ) -> TrainingResult:
-    """Fit one neural model for one fold with validation early stopping."""
+    """Fit one neural model for one fold with validation early stopping.
+
+    A validation plateau reduces the learning rate and restarts AdamW's
+    accumulated moments.
+    """
     batches = load_fold_batches(config, fold)
     write_workflow_manifest(config, config.project.output_dir)
     model = initialise_model(
@@ -377,8 +381,8 @@ def train_neural_model(
         else config.training.unet_learning_rate
     )
     current_learning_rate = initial_learning_rate
-    # Unit-rate AdamW lets the plateau scheduler scale complete updates while
-    # preserving moments and decoupled weight decay across LR reductions.
+    # Unit-rate AdamW lets the plateau scheduler scale complete updates.  Its
+    # transform state is deliberately restarted after every actual reduction.
     optimiser = optax.adamw(1.0, weight_decay=config.training.weight_decay)
     optimiser_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
     key = jax.random.PRNGKey(config.training.seed)
@@ -449,11 +453,18 @@ def train_neural_model(
                 lr_stale_epochs >= config.training.lr_patience
                 and current_learning_rate > config.training.min_learning_rate
             ):
-                current_learning_rate = max(
+                next_learning_rate = max(
                     config.training.min_learning_rate,
                     current_learning_rate * config.training.lr_factor,
                 )
-                lr_stale_epochs = 0
+                if next_learning_rate < current_learning_rate:
+                    current_learning_rate = next_learning_rate
+                    lr_stale_epochs = 0
+                    # Restart AdamW at the current model parameters while
+                    # retaining learned weights and ``stale_epochs``.  Saving
+                    # this fresh state below makes resume cross the scheduler
+                    # boundary identically to uninterrupted training.
+                    optimiser_state = optimiser.init(eqx.filter(model, eqx.is_inexact_array))
         eqx.tree_serialise_leaves(latest, (model, optimiser_state, key))
         state_path.write_text(
             json.dumps(
