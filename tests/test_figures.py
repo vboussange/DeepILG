@@ -81,21 +81,29 @@ def test_a_small_deviation_from_equal_values_breaks_no_axis():
 
 def test_fold_figure_shows_extremes_on_readable_log_segments_without_value_labels(tmp_path):
     scores = {
-        "reference": ([0.6, 0.65, 0.7, 0.72, 0.75], [0.2, 0.25, 0.3, 0.28, 0.22], [0.05] * 5),
-        "unet": (
+        ("reference", "IBD model"): (
+            [0.6, 0.65, 0.7, 0.72, 0.75],
+            [0.2, 0.25, 0.3, 0.28, 0.22],
+            [0.05] * 5,
+        ),
+        ("unet", "U-Net†"): (
             [0.5, 0.45, 0.4, 0.55, 0.5],
             [0.3, -900.0, 0.1, 0.2, -50.0],
             [0.04, 2.7] * 2 + [0.36],
         ),
-        "loglinear": ([0.7, 0.8, 0.75, 0.78, 0.82], [0.5, 0.6, 0.55, 0.45, 0.4], [0.03] * 5),
+        ("loglinear", "Log-linear encoder"): (
+            [0.7, 0.8, 0.75, 0.78, 0.82],
+            [0.5, 0.6, 0.55, 0.45, 0.4],
+            [0.03] * 5,
+        ),
     }
     path = tmp_path / "fold_metrics.csv"
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(["model", "label", "fold", "pearson_r", "r2", "rmse"])
-        for model, columns in scores.items():
+        for (model, label), columns in scores.items():
             writer.writerows(
-                [model, model, fold, *row] for fold, row in enumerate(zip(*columns, strict=True))
+                [model, label, fold, *row] for fold, row in enumerate(zip(*columns, strict=True))
             )
 
     figure = draw_benchmark_figure(path)
@@ -119,4 +127,11 @@ def test_fold_figure_shows_extremes_on_readable_log_segments_without_value_label
         boxes = [label.get_window_extent() for label in labels]
         assert not any(a.overlaps(b) for a, b in itertools.combinations(boxes, 2))
     assert not [text for axis in figure.axes for text in axis.texts]
+    # At tick size a plain dagger reads as a "t"; the figure draws a raised math dagger.
+    for axis in (correlation, r2_low, rmse_bulk):
+        assert [label.get_text() for label in axis.get_xticklabels()] == [
+            "IBD model",
+            r"U-Net$^\dagger$",
+            "Log-linear encoder",
+        ]
     plt.close(figure)

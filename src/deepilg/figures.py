@@ -250,6 +250,11 @@ def _style_log_segment(axis, segment: AxisSegment) -> None:
     axis.tick_params(axis="y", which="minor", length=1.5, width=0.5)
 
 
+def _tick_label(label: str) -> str:
+    """Raise a trailing no-pooling dagger, which reads as a "t" at tick-label size."""
+    return f"{label[:-1]}$^\\dagger$" if label.endswith("\N{DAGGER}") else label
+
+
 BENCHMARK_FIGURE_STYLE = {
     "font.family": "sans-serif",
     "font.size": 6.5,
@@ -374,7 +379,11 @@ def draw_benchmark_figure(fold_metrics_csv: str | Path) -> Figure:
                 axis.tick_params(axis="y", width=0.7, length=2.5, pad=2)
                 if row == len(segments) - 1:
                     axis.set_xticks(
-                        positions, labels, rotation=48, ha="right", rotation_mode="anchor"
+                        positions,
+                        [_tick_label(label) for label in labels],
+                        rotation=48,
+                        ha="right",
+                        rotation_mode="anchor",
                     )
                     axis.tick_params(axis="x", length=0, pad=3)
                 else:
