@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import itertools
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import equinox as eqx
@@ -15,9 +15,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
 from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
-from matplotlib.ticker import NullLocator
 from rasterio.plot import plotting_extent
 from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
@@ -99,10 +100,16 @@ def summarize_surfaces(surfaces: Sequence[np.ndarray]) -> tuple[np.ndarray, np.n
 
 FOLD_COLORS = ("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00")
 FOLD_MARKERS = ("o", "s", "^", "D", "P")
-# Tukey's far-out fences lie this many interquartile ranges beyond the quartiles.
-FAR_OUT_FENCE = 3.0
+# A fold value is far out beyond this many median absolute deviations (MADs) from
+# its panel's median: for normal data, Tukey's far-out fences (three interquartile
+# ranges beyond the quartiles, 4.7 standard deviations), but robust to up to half
+# the values being extreme instead of a quarter.
+FAR_OUT_MADS = 7.0
+# The MAD is floored at this fraction of the panel's median magnitude, so that
+# deviations tiny relative to the values themselves never break the axis.
+MIN_MAD_FRACTION = 0.1
 # Height of a segment beyond an axis break, relative to the bulk segment.
-OUTLIER_SEGMENT_HEIGHT = 0.36
+OUTLIER_SEGMENT_HEIGHT = 0.42
 # Figure width in inches: the text width of the manuscript, so text prints at size.
 BENCHMARK_FIGURE_WIDTH = 5.5
 
@@ -139,66 +146,81 @@ class FoldAxis:
 def fold_axis(values: Sequence[float]) -> FoldAxis:
     """Split a panel's y-axis so that far outliers neither flatten nor hide other values.
 
-    The bulk segment spans, on a linear scale, the values within Tukey's far-out
-    fences (three interquartile ranges beyond the quartiles). Values beyond a
-    fence move past an axis break onto a segment of their own, logarithmic in
-    magnitude when they share a sign and linear otherwise. Every value lies in
-    exactly one segment, and segments do not overlap.
+    The bulk segment spans, on a linear scale, the values within seven median
+    absolute deviations (MADs) of the median, the robust counterpart of Tukey's
+    far-out fences. The MAD is floored at a tenth of the median magnitude, so a
+    panel of (nearly) equal values breaks only for a deviation of at least 70%
+    of that magnitude. Values beyond the fences move past an axis break onto a
+    segment of their own, logarithmic in magnitude when they share a sign and
+    linear otherwise. Every value lies in exactly one segment, and segments do
+    not overlap.
     """
     array = np.asarray(values, dtype=np.float64)
-    lower, upper = np.quantile(array, [0.25, 0.75])
-    fence = FAR_OUT_FENCE * (upper - lower)
-    inside = array[(array >= lower - fence) & (array <= upper + fence)]
+    median = float(np.median(array))
+    spread = float(np.median(np.abs(array - median)))
+    fence = FAR_OUT_MADS * max(spread, MIN_MAD_FRACTION * float(np.median(np.abs(array))))
+    inside = array[np.abs(array - median) <= fence]
     margin = 0.08 * (float(np.ptp(inside)) or max(abs(float(inside[0])), 1.0))
     low, high = float(inside.min()) - margin, float(inside.max()) + margin
     below = above = None
-    if np.any(array < lower - fence):
-        outliers = array[array < lower - fence]
+    if (outliers := array[array < inside.min()]).size:
         # The break lies halfway between the outliers and the bulk.
         cut = (float(outliers.max()) + float(inside.min())) / 2
         low = max(low, cut)
-        segment = _outlier_segment(outliers, margin)
-        below = replace(segment, high=min(segment.high, cut))
-    if np.any(array > upper + fence):
-        outliers = array[array > upper + fence]
+        below = _outlier_segment(outliers, margin, high=cut)
+    if (outliers := array[array > inside.max()]).size:
         cut = (float(outliers.min()) + float(inside.max())) / 2
         high = min(high, cut)
-        segment = _outlier_segment(outliers, margin)
-        above = replace(segment, low=max(segment.low, cut))
+        above = _outlier_segment(outliers, margin, low=cut)
     return FoldAxis(AxisSegment(low, high), below, above)
 
 
-def _outlier_segment(values: np.ndarray, margin: float) -> AxisSegment:
-    """Span far outliers: log-scaled magnitudes when they share a sign, else linear."""
-    if np.all(values > 0) or np.all(values < 0):
+def _outlier_segment(
+    values: np.ndarray, margin: float, *, low: float = -np.inf, high: float = np.inf
+) -> AxisSegment:
+    """Span far outliers within ``[low, high]``: log magnitudes when they share a sign."""
+    log = bool(np.all(values > 0) or np.all(values < 0))
+    if log:
         magnitudes = np.abs(values)
         decades = float(np.log10(magnitudes.max() / magnitudes.min()))
         pad = 10.0 ** (0.12 * max(decades, 1.0))
-        smallest, largest = float(magnitudes.min()) / pad, float(magnitudes.max()) * pad
-        if values[0] > 0:
-            return AxisSegment(smallest, largest, log=True)
-        return AxisSegment(-largest, -smallest, log=True)
-    margin = max(0.08 * float(np.ptp(values)), margin)
-    return AxisSegment(float(values.min()) - margin, float(values.max()) + margin)
+        ends = np.sign(values[0]) * np.asarray([magnitudes.min() / pad, magnitudes.max() * pad])
+    else:
+        margin = max(0.08 * float(np.ptp(values)), margin)
+        ends = np.asarray([values.min() - margin, values.max() + margin])
+    return AxisSegment(max(float(ends.min()), low), min(float(ends.max()), high), log=log)
 
 
-def _log_segment_ticks(segment: AxisSegment) -> list[float]:
-    """Return powers of ten within a log segment, or finer steps when fewer than two fit."""
+def _log_segment_ticks(segment: AxisSegment, min_gap: float) -> tuple[list[float], list[float]]:
+    """Return the labelled and the minor ticks of a log segment.
+
+    Labelled ticks use the finest of 1-9, 1-2-5, 1-3 and 1 multiples of powers of
+    ten whose neighbours lie at least ``min_gap`` decades apart, thinning the
+    decades when even those would crowd. Minor ticks mark the other 1-9 multiples.
+    """
     sign = 1.0 if segment.low > 0 else -1.0
     smallest, largest = sorted((abs(segment.low), abs(segment.high)))
     exponents = range(int(np.floor(np.log10(smallest))), int(np.ceil(np.log10(largest))) + 1)
-    ticks: list[float] = []
-    for steps in ((1.0,), (1.0, 2.0, 5.0), tuple(float(step) for step in range(1, 10))):
-        ticks = sorted(
-            sign * step * 10.0**exponent
+
+    def magnitudes(steps: Sequence[int], stride: int = 1) -> list[float]:
+        return [
+            step * 10.0**exponent
             for exponent in exponents
+            if exponent % stride == 0
             for step in steps
             if smallest <= step * 10.0**exponent <= largest
-        )
-        if len(ticks) >= 2:
-            return ticks
-    # A segment narrower than one step: label its geometric centre.
-    return ticks or [sign * float(f"{np.sqrt(smallest * largest):.2g}")]
+        ]
+
+    for steps in ((1, 2, 3, 4, 5, 6, 7, 8, 9), (1, 2, 5), (1, 3), (1,)):
+        labelled = magnitudes(steps)
+        if len(labelled) >= 2 and np.diff(np.log10(labelled)).min() >= min_gap:
+            break
+    else:
+        labelled = magnitudes((1,), stride=max(1, int(np.ceil(min_gap))))
+        # A segment narrower than one decade step: label its geometric centre.
+        labelled = labelled or [float(f"{np.sqrt(smallest * largest):.2g}")]
+    minor = [value for value in magnitudes(range(1, 10)) if value not in labelled]
+    return [sign * value for value in labelled], [sign * value for value in minor]
 
 
 def _log_tick_label(value: float, plain: bool) -> str:
@@ -214,15 +236,44 @@ def _log_tick_label(value: float, plain: bool) -> str:
 
 def _style_log_segment(axis, segment: AxisSegment) -> None:
     """Give a segment beyond a break a logarithmic scale with readable magnitudes."""
-    smallest = min(abs(segment.low), abs(segment.high))
+    smallest, largest = sorted((abs(segment.low), abs(segment.high)))
     axis.set_yscale("symlog", linthresh=10.0 ** np.floor(np.log10(smallest)))
-    ticks = _log_segment_ticks(segment)
-    plain = all(1e-2 <= abs(tick) <= 1e3 for tick in ticks)
-    axis.set_yticks(ticks, [_log_tick_label(tick, plain) for tick in ticks])
-    axis.yaxis.set_minor_locator(NullLocator())
+    height = axis.get_position().height * axis.figure.get_figheight() * 72
+    points_per_decade = height / np.log10(largest / smallest)
+    label_points = FontProperties(size=plt.rcParams["ytick.labelsize"]).get_size_in_points()
+    # Labels stay at least one and a half label heights apart.
+    labelled, minor = _log_segment_ticks(segment, 1.5 * label_points / points_per_decade)
+    plain = all(1e-2 <= abs(tick) <= 1e3 for tick in labelled)
+    axis.set_yticks(labelled, [_log_tick_label(tick, plain) for tick in labelled])
+    # Minor ticks only where a decade is tall enough to tell them apart.
+    axis.set_yticks(minor if points_per_decade >= 6 else [], minor=True)
+    axis.tick_params(axis="y", which="minor", length=1.5, width=0.5)
+
+
+BENCHMARK_FIGURE_STYLE = {
+    "font.family": "sans-serif",
+    "font.size": 6.5,
+    "axes.labelsize": 7,
+    "xtick.labelsize": 6.3,
+    "ytick.labelsize": 6.3,
+    "legend.fontsize": 6.5,
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+}
 
 
 def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
+    """Save :func:`draw_benchmark_figure` for a fold-metrics CSV to ``output``."""
+    with plt.rc_context(BENCHMARK_FIGURE_STYLE):
+        figure = draw_benchmark_figure(fold_metrics_csv)
+        destination = Path(output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(destination, bbox_inches="tight", pad_inches=0.02)
+        plt.close(figure)
+    return destination
+
+
+def draw_benchmark_figure(fold_metrics_csv: str | Path) -> Figure:
     """Draw one boxplot per treatment and metric, with one colored marker per fold.
 
     Treatments keep their order of appearance in the CSV, which needs ``model``,
@@ -249,24 +300,13 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
     if len(values) != len(rows) or len(values) != len(labels) * len(folds):
         raise ValueError("Fold metrics need exactly one row per treatment and fold")
     metrics = (("pearson_r", "Pearson's $r$"), ("r2", "$R^2$"), ("rmse", "RMSE"))
-    with plt.rc_context(
-        {
-            "font.family": "sans-serif",
-            "font.size": 6.5,
-            "axes.labelsize": 7,
-            "xtick.labelsize": 6.3,
-            "ytick.labelsize": 6.3,
-            "legend.fontsize": 6.5,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    ):
+    with plt.rc_context(BENCHMARK_FIGURE_STYLE):
         positions = np.arange(len(labels), dtype=float)
-        offsets = np.linspace(-0.2, 0.2, len(folds)) if len(folds) > 1 else np.zeros(1)
+        offsets = np.linspace(-0.34, 0.34, len(folds)) if len(folds) > 1 else np.zeros(1)
         figure = plt.figure(figsize=(BENCHMARK_FIGURE_WIDTH, 2.9))
         figure.patch.set_facecolor("white")
         panels = figure.add_gridspec(
-            1, len(metrics), left=0.08, right=0.995, bottom=0.31, top=0.87, wspace=0.52
+            1, len(metrics), left=0.08, right=0.995, bottom=0.31, top=0.87, wspace=0.45
         )
         for column, (metric, ylabel) in enumerate(metrics):
             scores = {
@@ -292,7 +332,7 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
                 boxplot = axis.boxplot(
                     [[scores[label, fold] for fold in folds] for label in labels],
                     positions=positions,
-                    widths=0.56,
+                    widths=0.76,
                     patch_artist=True,
                     showfliers=False,
                     whis=(0, 100),
@@ -314,10 +354,10 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
                         axis.scatter(
                             *zip(*shown, strict=True),
                             marker=FOLD_MARKERS[index % len(FOLD_MARKERS)],
-                            s=13,
+                            s=11,
                             facecolor=FOLD_COLORS[index % len(FOLD_COLORS)],
                             edgecolor="white",
-                            linewidth=0.4,
+                            linewidth=0.35,
                             zorder=3,
                             clip_on=False,
                         )
@@ -378,11 +418,7 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
             handletextpad=0.3,
             columnspacing=1.1,
         )
-        destination = Path(output)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(destination, bbox_inches="tight", pad_inches=0.02)
-        plt.close(figure)
-    return destination
+    return figure
 
 
 @eqx.filter_jit
