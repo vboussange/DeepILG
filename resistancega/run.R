@@ -68,8 +68,9 @@ read_surface <- function(path) {
   surface
 }
 
-fit_region <- function(input_dir, output_dir, seed) {
+fit_region <- function(input_dir, output_dir, seed, workers = 1L) {
   if (is.na(seed) || seed < 0L) abort("SEED must be a non-negative integer")
+  if (is.na(workers) || workers < 1L) abort("WORKERS must be a positive integer")
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   protected <- file.path(output_dir, c("fit.rds", "best_surface.tif", "fit_summary.csv"))
   if (any(file.exists(protected))) {
@@ -90,6 +91,9 @@ fit_region <- function(input_dir, output_dir, seed) {
     method = "commuteDistance",
     commute.approx = "none"
   )
+  # GA.prep draws the starting suggestions before ga() applies the seed, so
+  # seed them too: the fit then depends only on the seed and the inputs.
+  set.seed(seed)
   ga_inputs <- ResistanceGA2::GA.prep(
     raster = surface,
     Results.dir = file.path(output_dir, "optimizer"),
@@ -103,7 +107,10 @@ fit_region <- function(input_dir, output_dir, seed) {
     pmutation = 0.125,
     maxiter = 1000,
     run = 25,
-    parallel = FALSE,
+    # Without doRNG, GA evaluates the deterministic fitness through %dopar% and
+    # keeps selection, crossover, and mutation in this process, so the
+    # trajectory does not depend on the worker count.
+    parallel = if (workers > 1L) workers else FALSE,
     gaisl = FALSE,
     optim = FALSE,
     seed = seed,
@@ -150,6 +157,7 @@ fit_region <- function(input_dir, output_dir, seed) {
 
   summary <- data.frame(
     seed = seed,
+    workers = workers,
     max_generations = 1000L,
     stagnation_generations = 25L,
     ga_iterations = fit$GA.summary@iter,
@@ -228,19 +236,22 @@ main <- function() {
   if (length(args) < 1L || !args[[1]] %in% c("fit", "predict")) {
     abort(paste(
       "Usage:",
-      "  run.R fit INPUT_DIR OUTPUT_DIR SEED",
+      "  run.R fit INPUT_DIR OUTPUT_DIR SEED [WORKERS]",
       "  run.R predict INPUT_DIR OUTPUT_DIR {validation|test}",
       sep = "\n"
     ))
   }
   load_project_library()
   require_packages()
-  if (length(args) != 4L) abort("Expected exactly four command-line arguments")
   mode <- args[[1]]
+  if (length(args) != 4L && !(mode == "fit" && length(args) == 5L)) {
+    abort("Expected four command-line arguments, or five for fit with WORKERS")
+  }
   input_dir <- normalizePath(args[[2]], mustWork = TRUE)
   output_dir <- normalizePath(args[[3]], mustWork = mode == "predict")
   if (mode == "fit") {
-    fit_region(input_dir, output_dir, as.integer(args[[4]]))
+    workers <- if (length(args) == 5L) as.integer(args[[5]]) else 1L
+    fit_region(input_dir, output_dir, as.integer(args[[4]]), workers)
   } else {
     predict_region(input_dir, output_dir, args[[4]])
   }

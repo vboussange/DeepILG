@@ -21,7 +21,7 @@ class GeographicDistanceModel:
             raise ValueError("Reference-model coefficients must be non-negative")
 
     def predict(self, distances: np.ndarray) -> np.ndarray:
-        """Apply the shared calibration to a distance vector or matrix."""
+        """Apply the calibration to a distance vector or matrix."""
         values = self.slope * np.asarray(distances, dtype=np.float64) + self.intercept
         if values.ndim == 2 and values.shape[0] == values.shape[1]:
             values = values.copy()
@@ -50,6 +50,10 @@ class GeographicDistanceModel:
             ):
                 raise ValueError(f"{region}: distances and targets must be finite and non-negative")
             vectors.append((distance, target))
+        # Optimize the slope per largest training distance: per-metre slopes leave the
+        # problem so ill-conditioned that L-BFGS-B stops before moving the intercept.
+        scale = max(float(np.max(distance)) for distance, _ in vectors) or 1.0
+        vectors = [(distance / scale, target) for distance, target in vectors]
 
         def objective(parameters: np.ndarray) -> tuple[float, np.ndarray]:
             slope, intercept = parameters
@@ -71,10 +75,10 @@ class GeographicDistanceModel:
             return float(np.mean(losses)), np.mean(np.stack(gradients), axis=0)
 
         candidates = []
-        for start in ((0.0, 0.0), (1e-4, 0.0), (1e-3, 0.0), (0.0, 1e-2)):
+        for slope, intercept in ((0.0, 0.0), (1e-4, 0.0), (1e-3, 0.0), (0.0, 1e-2)):
             result = minimize(
                 objective,
-                np.asarray(start),
+                np.asarray((slope * scale, intercept)),
                 method="L-BFGS-B",
                 jac=True,
                 bounds=((0.0, None), (0.0, None)),
@@ -84,4 +88,4 @@ class GeographicDistanceModel:
         if not candidates:
             raise RuntimeError("Reference geographic-distance calibration did not converge")
         best = min(candidates, key=lambda result: objective(result.x)[0])
-        return cls(slope=float(best.x[0]), intercept=float(best.x[1]))
+        return cls(slope=float(best.x[0] / scale), intercept=float(best.x[1]))

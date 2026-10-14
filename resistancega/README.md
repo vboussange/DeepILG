@@ -7,7 +7,8 @@ comparator. Python exports one directory per population-holdout fold and geograp
 ## Environment
 
 Python dependencies remain managed exclusively by `uv`. R packages are the
-one exception and are pinned in `renv.lock`.
+one exception: the supported R environment is the `renv.lock` lockfile in this
+directory, restored with renv.
 
 ```bash
 R -q -e 'install.packages("renv", repos="https://cloud.r-project.org")'
@@ -46,7 +47,14 @@ uv run deepilg resistancega --config configs/benchmark.toml \
 ```
 
 This performs the expensive genetic-algorithm optimization. It refuses to
-overwrite an existing fit. Predict validation or test pairs without refitting:
+overwrite an existing fit. Add `--workers N` (default 1) to evaluate each
+generation's fitness on N CPU processes. Each process is limited to one BLAS and
+OpenMP thread. The seed fixes both the starting suggestions and the genetic
+algorithm. Selection, crossover, and mutation stay in the main R process and
+fitness is deterministic, so with the lockfile's packages (which exclude
+`doRNG`) a parallel fit follows the same trajectory as a single-core fit. The
+wrapper records the R process's wall-clock duration and worker count in
+`fit_timing.json`. Predict validation or test pairs without refitting:
 
 ```bash
 uv run deepilg resistancega --config configs/benchmark.toml \
@@ -60,7 +68,7 @@ Held-out predictions use fixed effects only; random effects are not imputed for
 unseen populations.
 
 After predicting all five regions for a fold, normalize their rows and compute
-the shared held-out metrics with:
+the common held-out metrics with:
 
 ```bash
 uv run deepilg evaluate --config configs/benchmark.toml --model resistancega --fold 0

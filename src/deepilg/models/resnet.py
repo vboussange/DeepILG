@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 from ..config import validate_patch_batch_size
 from .base import ConductanceModel
-from .common import patchify
+from .common import bounded_exponential, patchify
 
 
 @eqx.filter_checkpoint
@@ -80,7 +80,7 @@ class ResNet9Conductance(ConductanceModel):
         values = self.residual2(values)
         values = jax.nn.relu(self.norm3(self.conv3(values)))
         values = jnp.mean(values, axis=(1, 2))
-        return jnp.clip(jnp.exp(self.output(values).squeeze()) + 1e-2, 1e-2, 1e3)
+        return bounded_exponential(self.output(values).squeeze())
 
     def conductance(self, features: jax.Array, *, patch_batch_size: int | None = None) -> jax.Array:
         """Return the patch-grid conductance surface for one HWC raster.

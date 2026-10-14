@@ -135,6 +135,67 @@ def validate_fold_assignments(
                 raise ValueError(f"{region}: fold and genetic population identifiers differ")
 
 
+def generate_fold_assignments(
+    population_ids_by_region: Mapping[str, Sequence[str]],
+    *,
+    seed: int,
+    n_folds: int = 5,
+    n_validation: int = 2,
+) -> FoldAssignments:
+    """Draw balanced population-holdout folds from a seed.
+
+    Each region's populations are shuffled and cut into ``n_folds`` test sets
+    whose sizes differ by at most one.  The regions' larger test sets go to the
+    folds with the fewest held-out populations so far, so fold totals also
+    differ by at most one.  Every fold then draws ``n_validation`` validation
+    populations per region from its non-test populations.
+    """
+    if n_folds < 2:
+        raise ValueError("n_folds must be at least two")
+    generator = np.random.default_rng(seed)
+    larger_counts = np.zeros(n_folds, dtype=int)
+    assignments: dict[tuple[str, int, str], str] = {}
+    for region in sorted(population_ids_by_region):
+        ids = sorted({str(value) for value in population_ids_by_region[region]})
+        base, remainder = divmod(len(ids), n_folds)
+        if len(ids) - (base + (remainder > 0)) - n_validation < 2:
+            raise ValueError(f"{region}: too few populations for {n_folds} folds")
+        larger = np.lexsort((generator.random(n_folds), larger_counts))[:remainder]
+        larger_counts[larger] += 1
+        sizes = np.full(n_folds, base)
+        sizes[larger] += 1
+        shuffled = [ids[index] for index in generator.permutation(len(ids))]
+        for fold, held_out in enumerate(np.split(np.asarray(shuffled), np.cumsum(sizes)[:-1])):
+            test = set(held_out.tolist())
+            candidates = [population for population in ids if population not in test]
+            validation = set(
+                generator.choice(candidates, size=n_validation, replace=False).tolist()
+            )
+            for population in ids:
+                assignments[(region, fold, population)] = (
+                    "test"
+                    if population in test
+                    else "validation"
+                    if population in validation
+                    else "train"
+                )
+    folds = FoldAssignments(assignments)
+    validate_fold_assignments(folds, population_ids_by_region)
+    return folds
+
+
+def write_fold_assignments(folds: FoldAssignments, path: str | Path) -> Path:
+    """Write the canonical flat fold-assignment CSV."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("region", "fold", "population_id", "partition"))
+        for (region, fold, population), partition in sorted(folds.assignments.items()):
+            writer.writerow((region, fold, population, partition))
+    return destination
+
+
 def pair_mask(
     population_ids: Sequence[str],
     folds: FoldAssignments,

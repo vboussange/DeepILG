@@ -13,12 +13,30 @@ def test_every_documented_subcommand_parses() -> None:
     config = Path("configs/demo.toml")
     commands = (
         ["validate", "--config", config],
+        ["folds", "--config", config],
         ["download", "--config", config],
         ["preprocess", "--config", config],
         ["train", "--config", config, "--model", "resnet9", "--fold", "0"],
+        ["train", "--config", config, "--model", "loglinear", "--fold", "0", "--pooling", "none"],
+        ["train", "--config", config, "--model", "unet", "--fold", "0", "--region", "CWMA"],
         ["evaluate", "--config", config, "--model", "resistancega", "--fold", "0"],
+        ["evaluate", "--config", config, "--model", "resnet9", "--fold", "0", "--pooling", "none"],
         ["figures", "--config", config],
+        ["figures", "--config", config, "--kind", "resistance"],
         ["resistancega-export", "--config", config, "--fold", "0"],
+        [
+            "resistancega",
+            "--config",
+            config,
+            "--fold",
+            "0",
+            "--region",
+            "CWMA",
+            "--mode",
+            "fit",
+            "--workers",
+            "4",
+        ],
         [
             "resistancega",
             "--config",
@@ -35,6 +53,15 @@ def test_every_documented_subcommand_parses() -> None:
     )
     for command in commands:
         assert parser.parse_args([str(value) for value in command]).command == command[0]
+
+
+def test_resistancega_workers_default_to_one_and_must_be_positive() -> None:
+    parser = build_parser()
+    base = ["resistancega", "--config", "c.toml", "--fold", "0", "--region", "CWMA"]
+    assert parser.parse_args([*base, "--mode", "fit"]).workers == 1
+    assert parser.parse_args([*base, "--mode", "fit", "--workers", "4"]).workers == 4
+    with pytest.raises(SystemExit):
+        parser.parse_args([*base, "--mode", "fit", "--workers", "0"])
 
 
 def test_resistancega_predict_requires_a_split() -> None:

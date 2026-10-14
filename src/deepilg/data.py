@@ -174,11 +174,15 @@ def load_fst_directory(path: str | Path) -> dict[str, FSTMatrix]:
     }
 
 
-def linearize_fst(values: np.ndarray | jnp.ndarray) -> jnp.ndarray:
-    """Return the standard distance-like transform ``max(FST, 0)/(1-FST)``."""
-    array = jnp.asarray(values)
-    clipped = jnp.maximum(array, 0.0)
-    return clipped / (1.0 - clipped)
+def linearize_fst(values: np.ndarray | jnp.ndarray) -> np.ndarray:
+    """Return the standard distance-like transform ``max(FST, 0)/(1-FST)``.
+
+    The transform runs in float32 whatever JAX's float64 setting, so training,
+    export, evaluation, and reporting all see identical targets.
+    """
+    array = np.asarray(values, dtype=np.float32)
+    clipped = np.maximum(array, np.float32(0.0))
+    return clipped / (np.float32(1.0) - clipped)
 
 
 def load_coordinates(path: str | Path) -> Coordinates:

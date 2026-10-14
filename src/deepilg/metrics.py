@@ -42,7 +42,8 @@ def pearson_r(prediction: np.ndarray, target: np.ndarray) -> float:
     denominator = float(np.linalg.norm(prediction) * np.linalg.norm(target))
     if denominator == 0.0:
         raise ValueError("Pearson correlation is undefined for a constant vector")
-    return float(np.dot(prediction, target) / denominator)
+    # Rounding can push a perfect correlation past one; keep it in Fisher-z's domain.
+    return float(np.clip(np.dot(prediction, target) / denominator, -1.0, 1.0))
 
 
 def fisher_mean(correlations: Sequence[float]) -> float:

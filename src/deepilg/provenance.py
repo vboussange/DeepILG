@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,10 @@ def write_workflow_manifest(config: ExperimentConfig, directory: str | Path) -> 
                 f"Output directory belongs to a different data configuration: {destination.parent}"
             )
         return destination
-    destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    # Write then rename, so concurrent commands never read a partial manifest.
+    temporary = destination.with_name(f".{MANIFEST_NAME}.{os.getpid()}")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(destination)
     return destination
 
 

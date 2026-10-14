@@ -1,10 +1,13 @@
-"""Export the shared folds and covariates to ResistanceGA2's R workflow."""
+"""Export population-holdout folds and covariates to ResistanceGA2's R workflow."""
 
 from __future__ import annotations
 
 import csv
+import json
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -25,16 +28,22 @@ def run_resistancega(
     mode: Literal["fit", "predict"],
     split: Literal["validation", "test"] | None = None,
     rscript: str = "Rscript",
+    workers: int = 1,
 ) -> Path:
     """Run one configured ResistanceGA2 fit or prediction through the R entry point.
 
-    The fit seed is read from ``config.training.seed``. Prediction always reuses
-    the existing region-specific fit and never invokes optimization.
+    The fit seed is read from ``config.training.seed``. A fit evaluates the
+    genetic algorithm's fitness on ``workers`` CPU processes, each limited to
+    one BLAS/OpenMP thread, and records the R process's wall-clock duration in
+    ``fit_timing.json``. Prediction always reuses the existing region-specific
+    fit and never invokes optimization.
     """
     if mode == "fit" and split is not None:
         raise ValueError("--split is valid only when --mode predict")
     if mode == "predict" and split is None:
         raise ValueError("--split is required when --mode predict")
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("workers must be a positive integer")
     regions = tuple(discover_fst_regions(config.data.fst_dir))
     if region not in regions:
         raise ValueError(f"region must be one of: {', '.join(regions)}")
@@ -68,6 +77,7 @@ def run_resistancega(
             str(input_dir),
             str(fit_dir),
             str(config.training.seed),
+            str(workers),
         )
         expected = fit_dir / "fit.rds"
     else:
@@ -83,9 +93,19 @@ def run_resistancega(
         )
         expected = fit_dir / f"{split}_predictions.csv"
 
-    subprocess.run(arguments, cwd=config.root, check=True)
+    single_thread = {
+        name: "1" for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+    }
+    started = time.perf_counter()
+    subprocess.run(arguments, cwd=config.root, check=True, env=os.environ | single_thread)
+    seconds = time.perf_counter() - started
     if not expected.is_file():
         raise RuntimeError(f"ResistanceGA2 completed without producing {expected}")
+    if mode == "fit":
+        (fit_dir / "fit_timing.json").write_text(
+            json.dumps({"workers": workers, "wall_clock_seconds": seconds}, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return expected
 
 
@@ -202,7 +222,7 @@ def _write_labelled_matrix(
 
 
 def _aggregate_covariates(source: Path, destination: Path, *, patch_size: int) -> None:
-    """Aggregate native covariates to the shared patch grid used by all models."""
+    """Aggregate native covariates to the patch grid used by all models."""
     with rasterio.open(source) as raster:
         values = raster.read().astype(np.float64)
         profile = raster.profile.copy()

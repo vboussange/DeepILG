@@ -13,6 +13,8 @@ Please cite:
 > <https://doi.org/10.1111/mec.17808>
 
 Dryad releases these source data under CC0 1.0. The fold assignment is a
-lightweight derived input distributed with this repository under CC0 1.0.
+lightweight derived input distributed with this repository under CC0 1.0;
+`deepilg folds --config configs/benchmark.toml` regenerates it from the
+matrices' population identifiers with `split_seed = 17`.
 Exact coordinates are not included. The root `README.md` explains how to place
 authorized coordinates using `data/templates/coordinates.csv`.

@@ -8,12 +8,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    """Locations shared by all commands."""
+    """Locations used by all commands."""
 
     name: str
     output_dir: Path
@@ -30,6 +30,7 @@ class DataConfig:
     processed_dir: Path
     geolocation_status: str
     scientific_use: bool
+    split_seed: int = 17
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,10 @@ class PreprocessingConfig:
     road_radius_m: float = 300.0
 
 
+# Complete pooling fits one model across all regions; no pooling fits one per region.
+POOLING = ("complete", "none")
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
     """A single-fit neural optimisation configuration."""
@@ -48,7 +53,9 @@ class TrainingConfig:
     seed: int = 17
     epochs: int = 1_000
     patience: int = 100
+    pooling: Literal["complete", "none"] = "complete"
     resnet9_learning_rate: float = 1e-4
+    loglinear_learning_rate: float = 1e-2
     unet_learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     patch_batch_size: int | None = None
@@ -57,8 +64,10 @@ class TrainingConfig:
     min_learning_rate: float = 1e-6
 
     def __post_init__(self) -> None:
-        """Validate the optional patch-chunk/checkpointing policy."""
+        """Validate the pooling regime and the optional patch-chunk policy."""
         validate_patch_batch_size(self.patch_batch_size)
+        if self.pooling not in POOLING:
+            raise ValueError("[training].pooling must be 'complete' or 'none'")
 
 
 def validate_patch_batch_size(value: int | None) -> None:
@@ -158,6 +167,12 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("Artificial coordinates must set scientific_use = false")
     if config.data.geolocation_status == "empirical" and not config.data.scientific_use:
         raise ValueError("Empirical coordinates must set scientific_use = true")
+    if (
+        isinstance(config.data.split_seed, bool)
+        or not isinstance(config.data.split_seed, Integral)
+        or config.data.split_seed < 0
+    ):
+        raise ValueError("[data].split_seed must be a non-negative integer")
     if config.preprocessing.resolution_m <= 0:
         raise ValueError("[preprocessing].resolution_m must be positive")
     if config.preprocessing.patch_size <= 0:
@@ -172,6 +187,7 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("epochs, patience, and lr_patience must be positive")
     if (
         config.training.resnet9_learning_rate <= 0
+        or config.training.loglinear_learning_rate <= 0
         or config.training.unet_learning_rate <= 0
         or config.training.weight_decay < 0
     ):
@@ -182,9 +198,10 @@ def _validate(config: ExperimentConfig) -> None:
         raise ValueError("min_learning_rate must be positive")
     if config.training.min_learning_rate > min(
         config.training.resnet9_learning_rate,
+        config.training.loglinear_learning_rate,
         config.training.unet_learning_rate,
     ):
-        raise ValueError("min_learning_rate must not exceed either initial learning rate")
+        raise ValueError("min_learning_rate must not exceed any initial learning rate")
     config.solver.validate()
 
 
