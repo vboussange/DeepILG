@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import itertools
-from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import equinox as eqx
@@ -17,6 +17,7 @@ import rasterio
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
+from matplotlib.ticker import NullLocator
 from rasterio.plot import plotting_extent
 from rasterio.windows import Window
 from rasterio.windows import transform as window_transform
@@ -98,24 +99,127 @@ def summarize_surfaces(surfaces: Sequence[np.ndarray]) -> tuple[np.ndarray, np.n
 
 FOLD_COLORS = ("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00")
 FOLD_MARKERS = ("o", "s", "^", "D", "P")
+# Tukey's far-out fences lie this many interquartile ranges beyond the quartiles.
+FAR_OUT_FENCE = 3.0
+# Height of a segment beyond an axis break, relative to the bulk segment.
+OUTLIER_SEGMENT_HEIGHT = 0.36
+# Figure width in inches: the text width of the manuscript, so text prints at size.
+BENCHMARK_FIGURE_WIDTH = 5.5
 
 
-def fold_axis_limits(values: Sequence[float]) -> tuple[float, float] | None:
-    """Return display limits that leave only far outliers off-scale, or ``None``.
+@dataclass(frozen=True)
+class AxisSegment:
+    """One y-range of a fold-metric panel, from ``low`` to ``high``."""
 
-    Values beyond Tukey's far-out fences (three interquartile ranges beyond the
-    quartiles) would flatten every other treatment's fold values. The limits
-    span the remaining values with a margin; callers mark excluded values at
-    the axis edge.
+    low: float
+    high: float
+    log: bool = False
+
+    def contains(self, value: float) -> bool:
+        """Return whether the segment shows ``value``."""
+        return self.low <= value <= self.high
+
+
+@dataclass(frozen=True)
+class FoldAxis:
+    """A panel's y-axis: the bulk of the values, and far outliers beyond breaks."""
+
+    bulk: AxisSegment
+    below: AxisSegment | None = None
+    above: AxisSegment | None = None
+
+    @property
+    def segments(self) -> tuple[AxisSegment, ...]:
+        """Return the segments from top to bottom."""
+        return tuple(
+            segment for segment in (self.above, self.bulk, self.below) if segment is not None
+        )
+
+
+def fold_axis(values: Sequence[float]) -> FoldAxis:
+    """Split a panel's y-axis so that far outliers neither flatten nor hide other values.
+
+    The bulk segment spans, on a linear scale, the values within Tukey's far-out
+    fences (three interquartile ranges beyond the quartiles). Values beyond a
+    fence move past an axis break onto a segment of their own, logarithmic in
+    magnitude when they share a sign and linear otherwise. Every value lies in
+    exactly one segment, and segments do not overlap.
     """
     array = np.asarray(values, dtype=np.float64)
     lower, upper = np.quantile(array, [0.25, 0.75])
-    fence = 3.0 * (upper - lower)
+    fence = FAR_OUT_FENCE * (upper - lower)
     inside = array[(array >= lower - fence) & (array <= upper + fence)]
-    if inside.size == array.size:
-        return None
-    margin = 0.08 * max(float(np.ptp(inside)), 1e-12)
-    return float(inside.min() - margin), float(inside.max() + margin)
+    margin = 0.08 * (float(np.ptp(inside)) or max(abs(float(inside[0])), 1.0))
+    low, high = float(inside.min()) - margin, float(inside.max()) + margin
+    below = above = None
+    if np.any(array < lower - fence):
+        outliers = array[array < lower - fence]
+        # The break lies halfway between the outliers and the bulk.
+        cut = (float(outliers.max()) + float(inside.min())) / 2
+        low = max(low, cut)
+        segment = _outlier_segment(outliers, margin)
+        below = replace(segment, high=min(segment.high, cut))
+    if np.any(array > upper + fence):
+        outliers = array[array > upper + fence]
+        cut = (float(outliers.min()) + float(inside.max())) / 2
+        high = min(high, cut)
+        segment = _outlier_segment(outliers, margin)
+        above = replace(segment, low=max(segment.low, cut))
+    return FoldAxis(AxisSegment(low, high), below, above)
+
+
+def _outlier_segment(values: np.ndarray, margin: float) -> AxisSegment:
+    """Span far outliers: log-scaled magnitudes when they share a sign, else linear."""
+    if np.all(values > 0) or np.all(values < 0):
+        magnitudes = np.abs(values)
+        decades = float(np.log10(magnitudes.max() / magnitudes.min()))
+        pad = 10.0 ** (0.12 * max(decades, 1.0))
+        smallest, largest = float(magnitudes.min()) / pad, float(magnitudes.max()) * pad
+        if values[0] > 0:
+            return AxisSegment(smallest, largest, log=True)
+        return AxisSegment(-largest, -smallest, log=True)
+    margin = max(0.08 * float(np.ptp(values)), margin)
+    return AxisSegment(float(values.min()) - margin, float(values.max()) + margin)
+
+
+def _log_segment_ticks(segment: AxisSegment) -> list[float]:
+    """Return powers of ten within a log segment, or finer steps when fewer than two fit."""
+    sign = 1.0 if segment.low > 0 else -1.0
+    smallest, largest = sorted((abs(segment.low), abs(segment.high)))
+    exponents = range(int(np.floor(np.log10(smallest))), int(np.ceil(np.log10(largest))) + 1)
+    ticks: list[float] = []
+    for steps in ((1.0,), (1.0, 2.0, 5.0), tuple(float(step) for step in range(1, 10))):
+        ticks = sorted(
+            sign * step * 10.0**exponent
+            for exponent in exponents
+            for step in steps
+            if smallest <= step * 10.0**exponent <= largest
+        )
+        if len(ticks) >= 2:
+            return ticks
+    # A segment narrower than one step: label its geometric centre.
+    return ticks or [sign * float(f"{np.sqrt(smallest * largest):.2g}")]
+
+
+def _log_tick_label(value: float, plain: bool) -> str:
+    """Label a log-segment tick plainly, or as a power of ten when ``plain`` is false."""
+    if plain:
+        return f"{value:g}".replace("-", "\N{MINUS SIGN}")
+    exponent = int(np.floor(np.log10(abs(value)) + 1e-9))
+    mantissa = abs(value) / 10.0**exponent
+    sign = "-" if value < 0 else ""
+    coefficient = "" if np.isclose(mantissa, 1.0) else f"{mantissa:g}\\times"
+    return f"${sign}{coefficient}10^{{{exponent}}}$"
+
+
+def _style_log_segment(axis, segment: AxisSegment) -> None:
+    """Give a segment beyond a break a logarithmic scale with readable magnitudes."""
+    smallest = min(abs(segment.low), abs(segment.high))
+    axis.set_yscale("symlog", linthresh=10.0 ** np.floor(np.log10(smallest)))
+    ticks = _log_segment_ticks(segment)
+    plain = all(1e-2 <= abs(tick) <= 1e3 for tick in ticks)
+    axis.set_yticks(ticks, [_log_tick_label(tick, plain) for tick in ticks])
+    axis.yaxis.set_minor_locator(NullLocator())
 
 
 def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
@@ -124,8 +228,8 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
     Treatments keep their order of appearance in the CSV, which needs ``model``,
     ``label``, ``fold``, ``pearson_r``, ``r2``, and ``rmse`` columns. A light
     vertical line separates adjacent treatments of which only one predicts through
-    the effective-resistance layer. Far outliers (see :func:`fold_axis_limits`)
-    are drawn at the axis edge and labelled.
+    the effective-resistance layer. Far outliers of a panel appear at their value
+    beyond an axis break (see :func:`fold_axis`).
     """
     with Path(fold_metrics_csv).open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
@@ -148,82 +252,112 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
     with plt.rc_context(
         {
             "font.family": "sans-serif",
-            "font.size": 7.5,
-            "axes.labelsize": 8,
-            "xtick.labelsize": 7.5,
-            "ytick.labelsize": 7.3,
-            "legend.fontsize": 7.2,
+            "font.size": 6.5,
+            "axes.labelsize": 7,
+            "xtick.labelsize": 6.3,
+            "ytick.labelsize": 6.3,
+            "legend.fontsize": 6.5,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
     ):
         positions = np.arange(len(labels), dtype=float)
-        offsets = np.linspace(-0.16, 0.16, len(folds)) if len(folds) > 1 else np.zeros(1)
-        figure, axes = plt.subplots(1, len(metrics), figsize=(max(7.1, 1.45 * len(labels)), 3.75))
+        offsets = np.linspace(-0.2, 0.2, len(folds)) if len(folds) > 1 else np.zeros(1)
+        figure = plt.figure(figsize=(BENCHMARK_FIGURE_WIDTH, 2.9))
         figure.patch.set_facecolor("white")
-        for axis, (metric, ylabel) in zip(axes, metrics, strict=True):
-            limits = fold_axis_limits([float(row[metric]) for row in rows])
-            boxplot = axis.boxplot(
-                [[float(values[label, fold][metric]) for fold in folds] for label in labels],
-                positions=positions,
-                widths=0.48,
-                patch_artist=True,
-                showfliers=False,
-                whis=(0, 100),
-                medianprops={"color": "#1F2933", "linewidth": 1.4},
-                whiskerprops={"color": "#64717D", "linewidth": 0.9},
-                capprops={"color": "#64717D", "linewidth": 0.9},
-                boxprops={"edgecolor": "#64717D", "linewidth": 0.9},
+        panels = figure.add_gridspec(
+            1, len(metrics), left=0.08, right=0.995, bottom=0.31, top=0.87, wspace=0.52
+        )
+        for column, (metric, ylabel) in enumerate(metrics):
+            scores = {
+                (label, fold): float(values[label, fold][metric])
+                for label in labels
+                for fold in folds
+            }
+            layout = fold_axis(list(scores.values()))
+            segments = layout.segments
+            grid = panels[0, column].subgridspec(
+                len(segments),
+                1,
+                height_ratios=[
+                    1.0 if segment is layout.bulk else OUTLIER_SEGMENT_HEIGHT
+                    for segment in segments
+                ],
+                hspace=0.12,
             )
-            for box in boxplot["boxes"]:
-                box.set_facecolor("#EEF1F3")
-                box.set_alpha(0.78)
-            off_scale = Counter()
-            for index, fold in enumerate(folds):
-                fold_values = np.asarray([float(values[label, fold][metric]) for label in labels])
-                shown = fold_values if limits is None else np.clip(fold_values, *limits)
-                axis.scatter(
-                    positions + offsets[index],
-                    shown,
-                    marker=FOLD_MARKERS[index % len(FOLD_MARKERS)],
-                    s=25,
-                    facecolor=FOLD_COLORS[index % len(FOLD_COLORS)],
-                    edgecolor="white",
-                    linewidth=0.55,
-                    zorder=3,
-                    clip_on=False,
+            for row, segment in enumerate(segments):
+                axis = figure.add_subplot(grid[row, 0])
+                if segment.log:
+                    _style_log_segment(axis, segment)
+                boxplot = axis.boxplot(
+                    [[scores[label, fold] for fold in folds] for label in labels],
+                    positions=positions,
+                    widths=0.56,
+                    patch_artist=True,
+                    showfliers=False,
+                    whis=(0, 100),
+                    medianprops={"color": "#1F2933", "linewidth": 1.1},
+                    whiskerprops={"color": "#64717D", "linewidth": 0.7},
+                    capprops={"color": "#64717D", "linewidth": 0.7},
+                    boxprops={"edgecolor": "#64717D", "linewidth": 0.7},
                 )
-                for position, value, edge in zip(positions, fold_values, shown, strict=True):
-                    if value != edge:
-                        # Stack one treatment's labels inward from the edge they leave.
-                        below = value < edge
-                        stacked = off_scale[position, below]
-                        off_scale[position, below] += 1
-                        axis.annotate(
-                            f"{value:.3g}",
-                            (position, edge),
-                            xytext=(0, (7 + 8 * stacked) * (1 if below else -1)),
-                            textcoords="offset points",
-                            ha="center",
-                            va="center",
-                            fontsize=5.8,
-                            color=FOLD_COLORS[index % len(FOLD_COLORS)],
-                            bbox={"facecolor": "white", "edgecolor": "none", "pad": 0.4},
-                            zorder=4,
+                for box in boxplot["boxes"]:
+                    box.set_facecolor("#EEF1F3")
+                    box.set_alpha(0.78)
+                for index, fold in enumerate(folds):
+                    shown = [
+                        (position + offsets[index], scores[label, fold])
+                        for position, label in zip(positions, labels, strict=True)
+                        if segment.contains(scores[label, fold])
+                    ]
+                    if shown:
+                        axis.scatter(
+                            *zip(*shown, strict=True),
+                            marker=FOLD_MARKERS[index % len(FOLD_MARKERS)],
+                            s=13,
+                            facecolor=FOLD_COLORS[index % len(FOLD_COLORS)],
+                            edgecolor="white",
+                            linewidth=0.4,
+                            zorder=3,
+                            clip_on=False,
                         )
-            if limits is not None:
-                axis.set_ylim(*limits)
-            if metric == "r2":
-                axis.axhline(0.0, color="#7C8792", linewidth=0.8, linestyle="--", zorder=0)
-            for separator in separators:
-                axis.axvline(separator, color="#C3CAD1", linewidth=0.8, zorder=0)
-            axis.set_ylabel(ylabel)
-            axis.set_xlim(-0.48, len(labels) - 0.52)
-            axis.set_xticks(positions, labels, rotation=48, ha="right", rotation_mode="anchor")
-            axis.grid(axis="y", color="#D8DDE2", linewidth=0.65, alpha=0.9, zorder=0)
-            axis.spines[["top", "right"]].set_visible(False)
-            axis.spines[["left", "bottom"]].set_color("#64717D")
-            axis.tick_params(axis="x", length=0, pad=5)
+                if metric == "r2" and segment.contains(0.0):
+                    axis.axhline(0.0, color="#7C8792", linewidth=0.7, linestyle="--", zorder=0)
+                for separator in separators:
+                    axis.axvline(separator, color="#C3CAD1", linewidth=0.7, zorder=0)
+                axis.set_xlim(-0.5, len(labels) - 0.5)
+                axis.set_ylim(segment.low, segment.high)
+                axis.grid(axis="y", color="#D8DDE2", linewidth=0.5, alpha=0.9, zorder=0)
+                axis.spines[["top", "right"]].set_visible(False)
+                axis.spines[["left", "bottom"]].set_color("#64717D")
+                axis.spines[["left", "bottom"]].set_linewidth(0.7)
+                axis.tick_params(axis="y", width=0.7, length=2.5, pad=2)
+                if row == len(segments) - 1:
+                    axis.set_xticks(
+                        positions, labels, rotation=48, ha="right", rotation_mode="anchor"
+                    )
+                    axis.tick_params(axis="x", length=0, pad=3)
+                else:
+                    axis.spines["bottom"].set_visible(False)
+                    axis.set_xticks(positions)
+                    axis.tick_params(axis="x", bottom=False, labelbottom=False)
+                # Diagonal marks on the left spine show each break.
+                for edge, present in ((1.0, row > 0), (0.0, row < len(segments) - 1)):
+                    if present:
+                        axis.plot(
+                            [0.0],
+                            [edge],
+                            transform=axis.transAxes,
+                            marker=[(-1.0, -0.6), (1.0, 0.6)],
+                            markersize=5,
+                            linestyle="none",
+                            color="#64717D",
+                            markeredgecolor="#64717D",
+                            markeredgewidth=0.7,
+                            clip_on=False,
+                        )
+                if segment is layout.bulk:
+                    axis.set_ylabel(ylabel)
         figure.legend(
             handles=[
                 Line2D(
@@ -231,23 +365,22 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
                     [0],
                     color=FOLD_COLORS[index % len(FOLD_COLORS)],
                     marker=FOLD_MARKERS[index % len(FOLD_MARKERS)],
-                    markersize=5,
+                    markersize=4,
                     linestyle="None",
                     label=f"Fold {fold + 1}",
                 )
                 for index, fold in enumerate(folds)
             ],
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.01),
+            bbox_to_anchor=(0.5, 1.0),
             ncol=len(folds),
             frameon=False,
-            handletextpad=0.4,
-            columnspacing=1.25,
+            handletextpad=0.3,
+            columnspacing=1.1,
         )
-        figure.subplots_adjust(left=0.075, right=0.995, bottom=0.34, top=0.82, wspace=0.38)
         destination = Path(output)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        figure.savefig(destination, bbox_inches="tight")
+        figure.savefig(destination, bbox_inches="tight", pad_inches=0.02)
         plt.close(figure)
     return destination
 

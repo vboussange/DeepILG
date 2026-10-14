@@ -186,7 +186,7 @@ The report covers every `<model>/<pooling>` directory under `<output_dir>/evalua
 
 - `fold_metrics.csv`: `model,pooling,label,fold,pearson_r,r2,rmse,n_pairs,training_seconds`, one row per model, pooling, and fold;
 - `summary.csv`: `model,pooling,label`, the arithmetic mean and sample SD over folds of each metric (`pearson_r_mean,pearson_r_sd,r2_mean,r2_sd,rmse_mean,rmse_sd`), `n_folds,n_pairs`, and `training_seconds_mean,training_seconds_sd`;
-- `benchmark.pdf`: one boxplot per treatment and metric, in the same order and with the same labels, with one colored marker per fold and a light vertical line between the baselines and the effective-resistance-layer models.
+- `benchmark.pdf`: one boxplot per treatment and metric, in the same order and with the same labels, with one colored marker per fold and a light vertical line between the baselines and the effective-resistance-layer models. Within each panel, values beyond Tukey's far-out fences (three interquartile ranges beyond the panel's quartiles) appear at their value past an axis break, on a segment that is logarithmic in magnitude when those values share a sign, so that the other values keep a readable linear scale. The figure is 5.5 inches wide, the manuscript's text width.
 
 Rows list the baselines first, then the models that predict through the effective-resistance layer (the conductance models). Within each group, models go from simple to complex, each under complete pooling before no pooling:
 
