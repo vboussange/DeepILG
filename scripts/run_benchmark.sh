@@ -113,7 +113,7 @@ fits=()
 evaluations=()
 for fold in "${FOLD_IDS[@]}"; do
   for treatment in "reference complete" "resnet9 complete" "loglinear complete" \
-    "unet complete" "resnet9 none" "loglinear none"; do
+    "unet complete" "resnet9 none" "loglinear none" "unet none"; do
     evaluations+=("$treatment $fold")
     if [[ $treatment == *" none" ]]; then
       for region in "${REGIONS[@]}"; do fits+=("$treatment $fold $region"); done

@@ -104,15 +104,13 @@ uv run deepilg download   --config configs/benchmark.toml
 uv run deepilg preprocess --config configs/benchmark.toml
 ```
 
-Fit and score the learned models on every fold, the log-linear model and ResNet9 under both pooling regimes:
+Fit and score the learned models on every fold: the IBD model under complete pooling only, and U-Net, the log-linear model and ResNet9 under both pooling regimes. Every command enables float64, as the script does for every step:
 
 ```bash
 for fold in 0 1 2 3 4; do
-  for model in reference unet; do
-    uv run deepilg train    --config configs/benchmark.toml --model "$model" --fold "$fold"
-    uv run deepilg evaluate --config configs/benchmark.toml --model "$model" --fold "$fold"
-  done
-  for model in loglinear resnet9; do
+  JAX_ENABLE_X64=true uv run deepilg train    --config configs/benchmark.toml --model reference --fold "$fold"
+  JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/benchmark.toml --model reference --fold "$fold"
+  for model in unet loglinear resnet9; do
     for pooling in complete none; do
       JAX_ENABLE_X64=true uv run deepilg train    --config configs/benchmark.toml --model "$model" --fold "$fold" --pooling "$pooling"
       JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/benchmark.toml --model "$model" --fold "$fold" --pooling "$pooling"
