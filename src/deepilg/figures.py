@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import itertools
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,7 +24,7 @@ from scipy.stats import rankdata
 
 from .config import ExperimentConfig
 from .splits import load_fold_assignments
-from .training import fit_directory, initialise_model
+from .training import fit_directory, initialise_model, predicts_through_resistance_layer
 
 # Displayed native-pixel windows (row start, row stop, column start, column stop).
 # Regions without an entry are shown in full.
@@ -120,16 +121,25 @@ def fold_axis_limits(values: Sequence[float]) -> tuple[float, float] | None:
 def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
     """Draw one boxplot per treatment and metric, with one colored marker per fold.
 
-    Treatments keep their order of appearance in the CSV, which needs ``label``,
-    ``fold``, ``pearson_r``, ``r2``, and ``rmse`` columns. Far outliers (see
-    :func:`fold_axis_limits`) are drawn at the axis edge and labelled.
+    Treatments keep their order of appearance in the CSV, which needs ``model``,
+    ``label``, ``fold``, ``pearson_r``, ``r2``, and ``rmse`` columns. A light
+    vertical line separates adjacent treatments of which only one predicts through
+    the effective-resistance layer. Far outliers (see :func:`fold_axis_limits`)
+    are drawn at the axis edge and labelled.
     """
     with Path(fold_metrics_csv).open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
-    required = {"label", "fold", "pearson_r", "r2", "rmse"}
+    required = {"model", "label", "fold", "pearson_r", "r2", "rmse"}
     if not rows or not required.issubset(rows[0]):
         raise ValueError(f"Fold metrics must contain {sorted(required)}")
-    labels = list(dict.fromkeys(row["label"] for row in rows))
+    models = {row["label"]: row["model"] for row in rows}
+    labels = list(models)
+    through_layer = [predicts_through_resistance_layer(models[label]) for label in labels]
+    separators = [
+        index + 0.5
+        for index, (left, right) in enumerate(itertools.pairwise(through_layer))
+        if left != right
+    ]
     folds = sorted({int(row["fold"]) for row in rows})
     values = {(row["label"], int(row["fold"])): row for row in rows}
     if len(values) != len(rows) or len(values) != len(labels) * len(folds):
@@ -205,15 +215,11 @@ def benchmark_figure(fold_metrics_csv: str | Path, output: str | Path) -> Path:
                 axis.set_ylim(*limits)
             if metric == "r2":
                 axis.axhline(0.0, color="#7C8792", linewidth=0.8, linestyle="--", zorder=0)
+            for separator in separators:
+                axis.axvline(separator, color="#C3CAD1", linewidth=0.8, zorder=0)
             axis.set_ylabel(ylabel)
             axis.set_xlim(-0.48, len(labels) - 0.52)
-            axis.set_xticks(
-                positions,
-                [label.replace(" (no pooling)", "\n(no pooling)") for label in labels],
-                rotation=48,
-                ha="right",
-                rotation_mode="anchor",
-            )
+            axis.set_xticks(positions, labels, rotation=48, ha="right", rotation_mode="anchor")
             axis.grid(axis="y", color="#D8DDE2", linewidth=0.65, alpha=0.9, zorder=0)
             axis.spines[["top", "right"]].set_visible(False)
             axis.spines[["left", "bottom"]].set_color("#64717D")
@@ -257,7 +263,8 @@ def resistance_surface_figure(config: ExperimentConfig, output: str | Path) -> P
     Every fold's complete-pooling best-validation checkpoint predicts a patch
     conductance surface, which is bilinearly interpolated to native pixels and
     then inverted. The median and IQR across folds summarize log10 resistance.
-    Association CSVs are written next to the figure.
+    The maps outline one patch and show no sampling locations. Association CSVs
+    are written next to the figure.
     """
     assignments = load_fold_assignments(config.data.folds)
     models = []
@@ -277,8 +284,6 @@ def resistance_surface_figure(config: ExperimentConfig, output: str | Path) -> P
         features = np.load(directory / "features.npy", mmap_mode="r")
         with rasterio.open(directory / "covariates.tif") as raster:
             transform = raster.transform
-        with (directory / "populations.csv").open(newline="", encoding="utf-8") as stream:
-            populations = list(csv.DictReader(stream))
         surfaces = [
             upsample_resistance_surface(
                 np.asarray(
@@ -299,7 +304,6 @@ def resistance_surface_figure(config: ExperimentConfig, output: str | Path) -> P
             features=features,
             landcover=np.argmax(features[..., : len(LANDCOVER_CODES)], axis=-1),
             transform=transform,
-            populations=populations,
             window=window,
             median=median,
             iqr=iqr,
@@ -455,10 +459,6 @@ def _plot_maps(prepared, destination, *, patch_size):
         transform = window_transform(Window(c0, r0, c1 - c0, r1 - r0), data["transform"])
         extent = plotting_extent(data["median"][crop], transform)
         present_classes.update(np.unique(data["landcover"][crop]).tolist())
-        points = [
-            data["transform"] * (int(p["pixel_column"]) + 0.5, int(p["pixel_row"]) + 0.5)
-            for p in data["populations"]
-        ]
         for row, key in enumerate(("landcover", "median", "iqr")):
             axis = figure.add_subplot(grid[row, column + 2])
             kwargs = (
@@ -472,9 +472,6 @@ def _plot_maps(prepared, destination, *, patch_size):
             )
             images[key] = axis.imshow(
                 data[key][crop], extent=extent, origin="upper", interpolation="nearest", **kwargs
-            )
-            axis.scatter(
-                *np.asarray(points).T, s=5, c="white", edgecolors="black", linewidths=0.25, zorder=5
             )
             axis.set_xticks([])
             axis.set_yticks([])

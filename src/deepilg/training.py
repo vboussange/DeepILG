@@ -49,6 +49,12 @@ from .splits import (
 ModelName = Literal["reference", "resnet9", "unet", "loglinear"]
 LearnedModel = ConductanceModel | EmbeddingDistanceModel
 Partition = Literal["train", "validation", "test"]
+_MODEL_CLASSES: Mapping[str, type] = {
+    "reference": GeographicDistanceModel,
+    "resnet9": ResNet9Conductance,
+    "unet": UNetEmbeddingDistance,
+    "loglinear": LogLinearConductance,
+}
 
 
 @jax.tree_util.register_dataclass
@@ -215,6 +221,15 @@ def initialise_model(
     if name == "loglinear":
         return LogLinearConductance(patch_size=patch_size)
     raise ValueError("initialise_model supports only 'resnet9', 'unet', and 'loglinear'")
+
+
+def predicts_through_resistance_layer(model_name: str) -> bool:
+    """Return whether a model predicts through the differentiable effective-resistance layer.
+
+    Those are the conductance models. Every other model, including ResistanceGA2
+    and names this package does not define, predicts some other way.
+    """
+    return issubclass(_MODEL_CLASSES.get(model_name, object), ConductanceModel)
 
 
 def build_solver_contexts(

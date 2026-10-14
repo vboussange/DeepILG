@@ -137,7 +137,11 @@ def test_report_covers_present_treatments_in_a_fixed_order(tmp_path):
     assert figure == config.project.output_dir / "figures" / "benchmark.pdf"
     assert figure.read_bytes().startswith(b"%PDF")
     summary = _read_csv(figure.parent / "summary.csv")
-    assert [row["label"] for row in summary] == ["IBD model", "Log-linear", "ResNet9 (no pooling)"]
+    assert [row["label"] for row in summary] == [
+        "IBD model",
+        "Log-linear encoder",
+        "ResNet9 encoder†",
+    ]
     total_pairs = sum(len(_expected(fold)) for fold in range(2))
     assert {(row["n_folds"], int(row["n_pairs"])) for row in summary} == {("2", total_pairs)}
     loglinear = next(row for row in summary if row["model"] == "loglinear")

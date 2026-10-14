@@ -334,6 +334,8 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
     config = str(_tiny_study(tmp_path))
     treatments = (
         ("reference", "complete"),
+        ("unet", "complete"),
+        ("unet", "none"),
         ("loglinear", "complete"),
         ("loglinear", "none"),
         ("resnet9", "complete"),
@@ -351,7 +353,7 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
         )
 
     states = list((tmp_path / "outputs").glob("*/*/fold_*/**/training_state.json"))
-    assert len(states) == 3 * (1 + 1 + 2 + 1 + 2)
+    assert len(states) == 3 * (1 + 1 + 2 + 1 + 2 + 1 + 2)
     for state in states:
         assert json.loads(state.read_text())["wall_clock_seconds"] > 0
 
@@ -374,21 +376,27 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
     assert main(["figures", "--config", config]) == 0
     figures = tmp_path / "outputs" / "figures"
     assert (figures / "benchmark.pdf").read_bytes().startswith(b"%PDF")
-    summary = _read_csv(figures / "summary.csv")
-    assert [row["label"] for row in summary] == [
-        "IBD model",
-        "Log-linear",
-        "ResNet9",
-        "ResistanceGA (no pooling)",
-        "Log-linear (no pooling)",
-        "ResNet9 (no pooling)",
+    # Baselines, then the effective-resistance-layer models; complete before no pooling (†).
+    report_order = [
+        ("reference", "complete", "IBD model"),
+        ("resistancega", "none", "ResistanceGA†"),
+        ("unet", "complete", "U-Net"),
+        ("unet", "none", "U-Net†"),
+        ("loglinear", "complete", "Log-linear encoder"),
+        ("loglinear", "none", "Log-linear encoder†"),
+        ("resnet9", "complete", "ResNet9 encoder"),
+        ("resnet9", "none", "ResNet9 encoder†"),
     ]
+    summary = _read_csv(figures / "summary.csv")
+    assert [(row["model"], row["pooling"], row["label"]) for row in summary] == report_order
     assert {row["n_folds"] for row in summary} == {"3"}
     assert {int(row["n_pairs"]) for row in summary} == {
         sum(len(_expected_test_pairs(fold)) for fold in range(3))
     }
     fold_metrics = _read_csv(figures / "fold_metrics.csv")
-    assert len(fold_metrics) == 6 * 3
+    assert [(row["model"], row["pooling"], row["label"], row["fold"]) for row in fold_metrics] == [
+        (*treatment, fold) for treatment in report_order for fold in ("0", "1", "2")
+    ]
     for row in fold_metrics:
         assert np.isfinite([float(row[name]) for name in ("pearson_r", "r2", "rmse")]).all()
         assert float(row["training_seconds"]) > 0

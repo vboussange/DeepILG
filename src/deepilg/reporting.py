@@ -14,28 +14,32 @@ from .data import linearize_fst, load_fst_directory
 from .figures import benchmark_figure
 from .metrics import aggregate_folds, evaluate_fold
 from .splits import load_fold_assignments, pair_mask, validate_fold_assignments
+from .training import predicts_through_resistance_layer
 
+# Display names, from simple to complex within each group of treatments.
 MODEL_LABELS = {
     "reference": "IBD model",
     "resistancega": "ResistanceGA",
-    "loglinear": "Log-linear",
-    "resnet9": "ResNet9",
     "unet": "U-Net",
+    "loglinear": "Log-linear encoder",
+    "resnet9": "ResNet9 encoder",
 }
+NO_POOLING_MARK = "†"
 METRICS = ("pearson_r", "r2", "rmse")
 
 
 def treatment_label(model: str, pooling: str) -> str:
-    """Return the display name of one model under one pooling regime."""
+    """Return the display name of one model under one pooling regime; † marks no pooling."""
     label = MODEL_LABELS.get(model, model)
-    return f"{label} (no pooling)" if pooling == "none" else label
+    return f"{label}{NO_POOLING_MARK}" if pooling == "none" else label
 
 
-def _treatment_order(treatment: tuple[str, str]) -> tuple[int, int, str]:
+def _treatment_order(treatment: tuple[str, str]) -> tuple[bool, int, str, int]:
+    """Baselines first, then effective-resistance-layer models; complete before no pooling."""
     model, pooling = treatment
     models = tuple(MODEL_LABELS)
     rank = models.index(model) if model in models else len(models)
-    return POOLING.index(pooling), rank, model
+    return predicts_through_resistance_layer(model), rank, model, POOLING.index(pooling)
 
 
 def _expected_pairs(config: ExperimentConfig) -> dict[int, dict[tuple[str, str, str], float]]:
@@ -119,6 +123,8 @@ def generate_benchmark_report(
     directory. Each needs every fold of the fold file, finite predictions, and
     exactly the held-out pairs and targets rebuilt from the folds and genetic
     data. ``fold_metrics.csv`` and ``summary.csv`` are written next to the figure.
+    They list the baselines first, then the models that predict through the
+    effective-resistance layer, each model under complete pooling before no pooling.
     """
     evaluation = Path(evaluation_dir or config.project.output_dir / "evaluation")
     destination = Path(figure or config.project.output_dir / "figures" / "benchmark.pdf")

@@ -188,11 +188,16 @@ The report covers every `<model>/<pooling>` directory under `<output_dir>/evalua
 
 - `fold_metrics.csv`: `model,pooling,label,fold,pearson_r,r2,rmse,n_pairs,training_seconds`, one row per model, pooling, and fold;
 - `summary.csv`: `model,pooling,label`, the arithmetic mean and sample SD over folds of each metric (`pearson_r_mean,pearson_r_sd,r2_mean,r2_sd,rmse_mean,rmse_sd`), `n_folds,n_pairs`, and `training_seconds_mean,training_seconds_sd`;
-- `benchmark.pdf`: one boxplot per model and metric, with one colored marker per fold.
+- `benchmark.pdf`: one boxplot per treatment and metric, in the same order and with the same labels, with one colored marker per fold and a light vertical line between the baselines and the effective-resistance-layer models.
 
-Labels read "IBD model", "ResistanceGA", "Log-linear", "ResNet9", and "U-Net", followed by "(no pooling)" under no pooling. Rows list complete pooling first.
+Rows list the baselines first, then the models that predict through the effective-resistance layer (the conductance models). Within each group, models go from simple to complex, each under complete pooling before no pooling:
 
-`--kind resistance` loads the complete-pooling ResNet9 best-validation checkpoint of every fold. Patch conductance is bilinearly interpolated to native pixels before inversion; the median and IQR across folds are computed in log10-resistance space. Next to `resistance_surfaces.pdf`, it writes `landcover_associations.csv` and `continuous_feature_associations.csv`, which compare median log10 resistance across land-cover classes, elevation quartiles, and road density, averaging regions equally.
+- baselines: "IBD model", "ResistanceGA†", "U-Net", "U-Net†";
+- effective-resistance-layer models: "Log-linear encoder", "Log-linear encoder†", "ResNet9 encoder", "ResNet9 encoder†".
+
+A dagger (†) marks no pooling; ResistanceGA, which always fits each region separately, always carries one. A model this package does not define is reported as a baseline under its directory name, after the known baselines.
+
+`--kind resistance` loads the complete-pooling ResNet9 best-validation checkpoint of every fold. Patch conductance is bilinearly interpolated to native pixels before inversion; the median and IQR across folds are computed in log10-resistance space. The maps outline one patch and show no sampling locations. Next to `resistance_surfaces.pdf`, it writes `landcover_associations.csv` and `continuous_feature_associations.csv`, which compare median log10 resistance across land-cover classes, elevation quartiles, and road density, averaging regions equally.
 
 `figures` runs only on authorised empirical data, so unpublished coordinates never reach published outputs. Generated files are never committed.
 
