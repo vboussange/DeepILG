@@ -102,11 +102,11 @@ FOLD_COLORS = ("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00")
 FOLD_MARKERS = ("o", "s", "^", "D", "P")
 # A fold value is far out beyond this many median absolute deviations (MADs) from
 # its panel's median: for normal data, Tukey's far-out fences (three interquartile
-# ranges beyond the quartiles, 4.7 standard deviations), but robust to up to half
-# the values being extreme instead of a quarter.
+# ranges beyond the quartiles, 4.7 standard deviations), but the rule holds while
+# fewer than half the values are extreme, instead of fewer than a quarter.
 FAR_OUT_MADS = 7.0
-# The MAD is floored at this fraction of the panel's median magnitude, so that
-# deviations tiny relative to the values themselves never break the axis.
+# The MAD is floored at this fraction of the panel's median magnitude, so that a
+# deviation of at most 70% of that magnitude never breaks the axis.
 MIN_MAD_FRACTION = 0.1
 # Height of a segment beyond an axis break, relative to the bulk segment.
 OUTLIER_SEGMENT_HEIGHT = 0.42
@@ -149,17 +149,18 @@ def fold_axis(values: Sequence[float]) -> FoldAxis:
     The bulk segment spans, on a linear scale, the values within seven median
     absolute deviations (MADs) of the median, the robust counterpart of Tukey's
     far-out fences. The MAD is floored at a tenth of the median magnitude, so a
-    panel of (nearly) equal values breaks only for a deviation of at least 70%
-    of that magnitude. Values beyond the fences move past an axis break onto a
-    segment of their own, logarithmic in magnitude when they share a sign and
-    linear otherwise. Every value lies in exactly one segment, and segments do
-    not overlap.
+    deviation of at most 70% of that magnitude never breaks the axis. When half
+    or more of the values are exactly zero, the MAD and its floor are both zero;
+    that bulk lies on the zero tick of any linear axis, so no value breaks it.
+    Values beyond the fences move past an axis break onto a segment of their
+    own, logarithmic in magnitude when they share a sign and linear otherwise.
+    Every value lies in exactly one segment, and segments do not overlap.
     """
     array = np.asarray(values, dtype=np.float64)
     median = float(np.median(array))
     spread = float(np.median(np.abs(array - median)))
     fence = FAR_OUT_MADS * max(spread, MIN_MAD_FRACTION * float(np.median(np.abs(array))))
-    inside = array[np.abs(array - median) <= fence]
+    inside = array[np.abs(array - median) <= fence] if fence > 0 else array
     margin = 0.08 * (float(np.ptp(inside)) or max(abs(float(inside[0])), 1.0))
     low, high = float(inside.min()) - margin, float(inside.max()) + margin
     below = above = None
@@ -251,8 +252,13 @@ def _style_log_segment(axis, segment: AxisSegment) -> None:
 
 
 def _tick_label(label: str) -> str:
-    """Raise a trailing no-pooling dagger, which reads as a "t" at tick-label size."""
-    return f"{label[:-1]}$^\\dagger$" if label.endswith("\N{DAGGER}") else label
+    """Raise a trailing no-pooling dagger, which reads as a "t" at tick-label size.
+
+    Literal dollar signs before the dagger are escaped, so they stay out of mathtext.
+    """
+    if not label.endswith("\N{DAGGER}"):
+        return label
+    return label[:-1].replace("$", r"\$") + r"$^\dagger$"
 
 
 BENCHMARK_FIGURE_STYLE = {

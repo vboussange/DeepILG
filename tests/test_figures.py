@@ -135,3 +135,26 @@ def test_fold_figure_shows_extremes_on_readable_log_segments_without_value_label
             "Log-linear encoder",
         ]
     plt.close(figure)
+
+
+def test_a_panel_mostly_at_zero_breaks_no_axis():
+    values = [0.0] * 39 + [1e-6]
+    axis = fold_axis(values)
+    assert axis.below is None and axis.above is None
+    assert all(axis.bulk.contains(value) for value in values)
+
+
+def test_fold_figure_keeps_literal_dollar_signs_in_a_label_with_a_dagger(tmp_path):
+    path = tmp_path / "fold_metrics.csv"
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["model", "label", "fold", "pearson_r", "r2", "rmse"])
+        for model, label in (("reference", "IBD model"), ("custom", "Cost $5 model†")):
+            writer.writerows([model, label, fold, 0.5 + fold / 10, 0.3, 0.05] for fold in range(3))
+    figure = draw_benchmark_figure(path)
+    figure.canvas.draw()
+    assert [label.get_text() for label in figure.axes[0].get_xticklabels()] == [
+        "IBD model",
+        r"Cost \$5 model$^\dagger$",
+    ]
+    plt.close(figure)
