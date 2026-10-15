@@ -214,22 +214,24 @@ def _pairs(path: Path) -> set[tuple[str, str, str]]:
     return {(row["region"], row["population_i"], row["population_j"]) for row in _read_csv(path)}
 
 
-def test_no_pooling_fits_ignore_other_regions_and_are_reassembled_per_fold(tmp_path):
+@pytest.mark.parametrize("model", ["reference", "loglinear"])
+def test_no_pooling_fits_ignore_other_regions_and_are_reassembled_per_fold(tmp_path, model):
     config = str(_tiny_study(tmp_path, epochs=3))
-    fits = tmp_path / "outputs" / "loglinear"
-    evaluation = tmp_path / "outputs" / "evaluation" / "loglinear"
+    fits = tmp_path / "outputs" / model
+    evaluation = tmp_path / "outputs" / "evaluation" / model
+    artifact = "calibration.json" if model == "reference" else "best.eqx"
 
     def train(*options: str) -> None:
-        main(["train", "--config", config, "--model", "loglinear", "--fold", "0", *options])
+        main(["train", "--config", config, "--model", model, "--fold", "0", *options])
 
     def evaluate(*options: str) -> None:
-        main(["evaluate", "--config", config, "--model", "loglinear", "--fold", "0", *options])
+        main(["evaluate", "--config", config, "--model", model, "--fold", "0", *options])
 
     train("--pooling", "none")
     train()
     assert sorted(path.name for path in (fits / "none" / "fold_00").iterdir()) == ["A", "B"]
-    region_a = (fits / "none" / "fold_00" / "A" / "best.eqx").read_bytes()
-    pooled = (fits / "complete" / "fold_00" / "best.eqx").read_bytes()
+    region_a = (fits / "none" / "fold_00" / "A" / artifact).read_bytes()
+    pooled = (fits / "complete" / "fold_00" / artifact).read_bytes()
 
     evaluate("--pooling", "none")
     evaluate()
@@ -247,15 +249,79 @@ def test_no_pooling_fits_ignore_other_regions_and_are_reassembled_per_fold(tmp_p
     fst.write_text(fst.read_text().replace("0.06", "0.16"))
     shutil.rmtree(tmp_path / "outputs")
     train("--pooling", "none", "--region", "A")
-    assert (fits / "none" / "fold_00" / "A" / "best.eqx").read_bytes() == region_a
+    assert (fits / "none" / "fold_00" / "A" / artifact).read_bytes() == region_a
     assert not (fits / "none" / "fold_00" / "B").exists()
     # The same perturbation reaches a complete-pooling fit.
     train()
-    assert (fits / "complete" / "fold_00" / "best.eqx").read_bytes() != pooled
+    assert (fits / "complete" / "fold_00" / artifact).read_bytes() != pooled
 
     with pytest.raises(FileNotFoundError, match="B"):
         evaluate("--pooling", "none")
     assert not (evaluation / "none").exists()
+
+
+def test_ibd_pooling_workflow_uses_each_regions_calibration_and_reports_both(tmp_path):
+    config = str(_tiny_study(tmp_path))
+    output = tmp_path / "outputs"
+    for fold in range(3):
+        for pooling in ("complete", "none"):
+            options = [
+                "--config",
+                config,
+                "--model",
+                "reference",
+                "--fold",
+                str(fold),
+                "--pooling",
+                pooling,
+            ]
+            assert main(["train", *options]) == 0
+            assert main(["evaluate", *options]) == 0
+            evaluation = output / "evaluation" / "reference" / pooling / f"fold_{fold:02d}"
+            rows = _read_csv(evaluation / "test_predictions.csv")
+            expected = _expected_test_pairs(fold)
+            assert len(rows) == len(expected)
+            assert _pairs(evaluation / "test_predictions.csv") == set(expected)
+            seconds = 0.0
+            for region in REGIONS:
+                fit = output / "reference" / pooling / f"fold_{fold:02d}"
+                if pooling == "none":
+                    fit /= region
+                calibration = json.loads((fit / "calibration.json").read_text())
+                state = json.loads((fit / "training_state.json").read_text())
+                assert state["pooling"] == pooling
+                if pooling == "none":
+                    assert state["region"] == region
+                assert state["wall_clock_seconds"] > 0
+                if pooling == "none" or region == REGIONS[0]:
+                    seconds += state["wall_clock_seconds"]
+                for row in (row for row in rows if row["region"] == region):
+                    i, j = (POPULATIONS.index(row[key]) for key in ("population_i", "population_j"))
+                    distance = 30 * np.hypot(*(np.asarray(PIXELS[i]) - PIXELS[j]))
+                    assert float(row["prediction"]) == pytest.approx(
+                        calibration["slope"] * distance + calibration["intercept"]
+                    )
+                    assert (
+                        float(row["observed"]) == expected[(region, POPULATIONS[i], POPULATIONS[j])]
+                    )
+            assert json.loads((evaluation / "metrics.json").read_text())[
+                "training_seconds"
+            ] == pytest.approx(seconds)
+
+    assert main(["figures", "--config", config]) == 0
+    figures = output / "figures"
+    assert (figures / "benchmark.pdf").read_bytes().startswith(b"%PDF")
+    summary = _read_csv(figures / "summary.csv")
+    assert [(row["pooling"], row["label"]) for row in summary] == [
+        ("complete", "IBD model"),
+        ("none", "IBD model†"),
+    ]
+    assert {int(row["n_pairs"]) for row in summary} == {
+        sum(len(_expected_test_pairs(fold)) for fold in range(3))
+    }
+    assert [(row["label"], row["fold"]) for row in _read_csv(figures / "fold_metrics.csv")] == [
+        (label, str(fold)) for label in ("IBD model", "IBD model†") for fold in range(3)
+    ]
 
 
 def test_ibd_calibration_reaches_its_training_objective_minimum(tmp_path):
@@ -292,24 +358,11 @@ def test_ibd_calibration_reaches_its_training_objective_minimum(tmp_path):
         assert fitted <= objective(slopes, intercepts).min()
 
 
-def test_pooling_options_reject_unsupported_combinations(tmp_path):
+@pytest.mark.parametrize("model", ["reference", "unet"])
+def test_pooling_options_reject_unsupported_combinations(tmp_path, model):
     config = str(_tiny_study(tmp_path))
-    with pytest.raises(ValueError, match="complete pooling"):
-        main(
-            [
-                "train",
-                "--config",
-                config,
-                "--model",
-                "reference",
-                "--fold",
-                "0",
-                "--pooling",
-                "none",
-            ]
-        )
     with pytest.raises(ValueError, match="no pooling"):
-        main(["train", "--config", config, "--model", "unet", "--fold", "0", "--region", "A"])
+        main(["train", "--config", config, "--model", model, "--fold", "0", "--region", "A"])
     with pytest.raises(ValueError, match="Unknown region"):
         main(
             [
@@ -317,7 +370,7 @@ def test_pooling_options_reject_unsupported_combinations(tmp_path):
                 "--config",
                 config,
                 "--model",
-                "unet",
+                model,
                 "--fold",
                 "0",
                 "--pooling",
@@ -334,6 +387,7 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
     config = str(_tiny_study(tmp_path))
     treatments = (
         ("reference", "complete"),
+        ("reference", "none"),
         ("unet", "complete"),
         ("unet", "none"),
         ("loglinear", "complete"),
@@ -353,7 +407,7 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
         )
 
     states = list((tmp_path / "outputs").glob("*/*/fold_*/**/training_state.json"))
-    assert len(states) == 3 * (1 + 1 + 2 + 1 + 2 + 1 + 2)
+    assert len(states) == 3 * (1 + 2 + 1 + 2 + 1 + 2 + 1 + 2)
     for state in states:
         assert json.loads(state.read_text())["wall_clock_seconds"] > 0
 
@@ -379,6 +433,7 @@ def test_every_treatment_is_trained_evaluated_and_reported_on_identical_pairs(tm
     # Baselines, then the effective-resistance-layer models; complete before no pooling (†).
     report_order = [
         ("reference", "complete", "IBD model"),
+        ("reference", "none", "IBD model†"),
         ("resistancega", "none", "ResistanceGA†"),
         ("unet", "complete", "U-Net"),
         ("unet", "none", "U-Net†"),

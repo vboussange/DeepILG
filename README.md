@@ -79,7 +79,7 @@ plateau restarts, and best-validation checkpoint selection apply to all of them.
 - `complete` (default) fits one model to all regions jointly, averaging the per-region losses and gradients equally.
 - `none` fits an independent model per region, from that region's inputs, training pairs, and validation pairs only.
 
-`train --pooling` and `evaluate --pooling` override the configured value. Under no pooling, `train` fits every region in turn, or only the region named by `--region`, so regions can run in parallel. `evaluate` then reassembles the per-region fits into one set of held-out predictions per fold before scoring. Pooling applies to `loglinear`, `resnet9`, and `unet`. The IBD model (`reference`) supports only complete pooling, and ResistanceGA2 always fits each region separately (no pooling).
+`train --pooling` and `evaluate --pooling` override the configured value. Under no pooling, `train` fits every region in turn, or only the region named by `--region`, so regions can run in parallel. `evaluate` then reassembles the per-region fits into one set of held-out predictions per fold before scoring. Pooling applies to `reference`, `loglinear`, `resnet9`, and `unet`. The IBD model (`reference`) fits its non-negative affine calibration on training pairs jointly under complete pooling, or separately in each region under no pooling. ResistanceGA2 always fits each region separately (no pooling).
 
 Fits are stored by model, pooling, and fold, with one more level per region under no pooling, for example `<output_dir>/resnet9/complete/fold_00/` and `<output_dir>/resnet9/none/fold_00/CWMA/`. Each fit directory holds `best.eqx` (the best-validation checkpoint), `latest.eqx` (for `--resume`), and `training_state.json`, which records the fit's wall-clock seconds (`wall_clock_seconds`, accumulated across resumes); the IBD model stores `calibration.json`. Evaluation mirrors the layout without the region level: `<output_dir>/evaluation/<model>/<pooling>/fold_<NN>/` holds `test_predictions.csv` (`model,pooling,fold,region,population_i,population_j,observed,prediction`) and `metrics.json` (fold metrics and the summed wall-clock training seconds of its fits; for ResistanceGA2, the R processes' durations recorded in `fit_timing.json`). ResistanceGA2 is evaluated under `evaluation/resistancega/none/`.
 
@@ -104,13 +104,11 @@ uv run deepilg download   --config configs/benchmark.toml
 uv run deepilg preprocess --config configs/benchmark.toml
 ```
 
-Fit and score the learned models on every fold: the IBD model under complete pooling only, and U-Net, the log-linear model and ResNet9 under both pooling regimes. Every command enables float64, as the script does for every step:
+Fit and score the IBD model, U-Net, the log-linear model and ResNet9 under both pooling regimes on every fold. Every command enables float64, as the script does for every step:
 
 ```bash
 for fold in 0 1 2 3 4; do
-  JAX_ENABLE_X64=true uv run deepilg train    --config configs/benchmark.toml --model reference --fold "$fold"
-  JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/benchmark.toml --model reference --fold "$fold"
-  for model in unet loglinear resnet9; do
+  for model in reference unet loglinear resnet9; do
     for pooling in complete none; do
       JAX_ENABLE_X64=true uv run deepilg train    --config configs/benchmark.toml --model "$model" --fold "$fold" --pooling "$pooling"
       JAX_ENABLE_X64=true uv run deepilg evaluate --config configs/benchmark.toml --model "$model" --fold "$fold" --pooling "$pooling"
@@ -190,7 +188,7 @@ The report covers every `<model>/<pooling>` directory under `<output_dir>/evalua
 
 Rows list the baselines first, then the models that predict through the effective-resistance layer (the conductance models). Within each group, models go from simple to complex, each under complete pooling before no pooling:
 
-- baselines: "IBD model", "ResistanceGA†", "U-Net", "U-Net†";
+- baselines: "IBD model", "IBD model†", "ResistanceGA†", "U-Net", "U-Net†";
 - effective-resistance-layer models: "Log-linear encoder", "Log-linear encoder†", "ResNet9 encoder", "ResNet9 encoder†".
 
 A dagger (†) marks no pooling; ResistanceGA, which always fits each region separately, always carries one. A model this package does not define is reported as a baseline under its directory name, after the known baselines.

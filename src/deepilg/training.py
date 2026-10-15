@@ -678,13 +678,14 @@ def _train_fit(
 
 
 def fit_reference_model(
-    config: ExperimentConfig, *, fold: int
+    config: ExperimentConfig, *, fold: int, region: str | None = None
 ) -> tuple[GeographicDistanceModel, Path]:
-    """Fit and save the IBD model: one non-negative calibration of geographic distance."""
-    if config.training.pooling != "complete":
-        raise ValueError("The IBD model (reference) supports only complete pooling")
+    """Fit and save an IBD calibration across all regions, or for one under no pooling."""
     started = time.perf_counter()
-    batches = load_fold_batches(config, fold)
+    path = (
+        fit_directory(config, model_name="reference", fold=fold, region=region) / "calibration.json"
+    )
+    batches = load_fold_batches(config, fold, region=region)
     write_workflow_manifest(config, config.project.output_dir)
     distances, targets = {}, {}
     for batch in batches:
@@ -701,7 +702,6 @@ def fit_reference_model(
             np.asarray(batch.targets), np.asarray(batch.masks["train"])
         )
     model = GeographicDistanceModel.fit(distances, targets)
-    path = fit_directory(config, model_name="reference", fold=fold) / "calibration.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"slope": model.slope, "intercept": model.intercept}, indent=2) + "\n",
@@ -709,10 +709,12 @@ def fit_reference_model(
     )
     state = dict(
         model="reference",
-        pooling="complete",
+        pooling=config.training.pooling,
         fold=fold,
         wall_clock_seconds=time.perf_counter() - started,
     )
+    if region is not None:
+        state["region"] = region
     (path.parent / "training_state.json").write_text(
         json.dumps(state, indent=2) + "\n", encoding="utf-8"
     )

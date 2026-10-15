@@ -50,8 +50,6 @@ def evaluate_model(
     Under no pooling (always the case for ResistanceGA), the per-region fits
     are reassembled into one prediction set for the fold before scoring.
     """
-    if model_name == "reference" and config.training.pooling != "complete":
-        raise ValueError("The IBD model (reference) supports only complete pooling")
     batches = load_fold_batches(config, fold)
     write_workflow_manifest(config, config.project.output_dir / "evaluation")
     if model_name == "resistancega":
@@ -138,12 +136,12 @@ def _fitted_predictions(
         for directory in set(directories.values())
     )
     if model_name == "reference":
-        payload = json.loads(
-            (directories[batches[0].region] / artifact).read_text(encoding="utf-8")
-        )
-        reference = GeographicDistanceModel(float(payload["slope"]), float(payload["intercept"]))
         matrices = {}
         for batch in batches:
+            payload = json.loads((directories[batch.region] / artifact).read_text(encoding="utf-8"))
+            reference = GeographicDistanceModel(
+                float(payload["slope"]), float(payload["intercept"])
+            )
             width = batch.features.shape[1]
             points = np.stack(
                 [

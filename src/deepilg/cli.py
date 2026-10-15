@@ -11,6 +11,7 @@ from pathlib import Path
 from . import __version__
 from .config import POOLING, ExperimentConfig, load_config
 from .data import (
+    discover_fst_regions,
     load_coordinates,
     load_fst_directory,
     validate_population_alignment,
@@ -241,11 +242,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("--resume applies only to neural models")
             if arguments.region is not None and config.training.pooling == "complete":
                 raise ValueError("A single region can be fitted only under no pooling")
-            model, path = fit_reference_model(config, fold=arguments.fold)
-            print(
-                f"reference fold {arguments.fold}: slope={model.slope:.6g}, "
-                f"intercept={model.intercept:.6g}; wrote {path}"
-            )
+            regions = (arguments.region,)
+            if config.training.pooling == "none" and arguments.region is None:
+                regions = tuple(discover_fst_regions(config.data.fst_dir))
+            for region in regions:
+                model, path = fit_reference_model(config, fold=arguments.fold, region=region)
+                suffix = f" {region}" if region else ""
+                print(
+                    f"reference fold {arguments.fold}{suffix}: slope={model.slope:.6g}, "
+                    f"intercept={model.intercept:.6g}; wrote {path}"
+                )
             return 0
         results = train_neural_model(
             config,

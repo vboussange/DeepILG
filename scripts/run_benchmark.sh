@@ -112,7 +112,7 @@ run_queues() {
 fits=()
 evaluations=()
 for fold in "${FOLD_IDS[@]}"; do
-  for treatment in "reference complete" "resnet9 complete" "loglinear complete" \
+  for treatment in "reference complete" "reference none" "resnet9 complete" "loglinear complete" \
     "unet complete" "resnet9 none" "loglinear none" "unet none"; do
     evaluations+=("$treatment $fold")
     if [[ $treatment == *" none" ]]; then
