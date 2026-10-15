@@ -174,3 +174,5 @@ def test_fst_validation_and_linearization() -> None:
         validate_fst_matrix(np.asarray([[0.0, 0.1], [0.2, 0.0]]), ("A", "B"), region="X")
     values = linearize_fst(np.asarray([-0.1, 0.0, 0.2]))
     np.testing.assert_allclose(values, np.asarray([0.0, 0.0, 0.25]))
+    # Single precision regardless of JAX's float64 setting (enabled for tests).
+    assert values.dtype == np.float32

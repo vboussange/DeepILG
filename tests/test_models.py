@@ -15,7 +15,7 @@ from deepilg.models import (
 from deepilg.models.common import patchify, pixel_to_patch_nodes
 
 
-def test_patchify_and_shared_patch_nodes() -> None:
+def test_patchify_and_colocated_patch_nodes() -> None:
     features = jnp.arange(8 * 12 * 2, dtype=jnp.float32).reshape(8, 12, 2)
     patches, shape = patchify(features, 4)
     assert patches.shape == (6, 2, 4, 4)
@@ -127,7 +127,7 @@ def test_encoders_reject_invalid_patch_batch_sizes(value) -> None:
             function(features, patch_batch_size=value)
 
 
-def test_unet_has_global_grid_output_and_zero_shared_patch_distance() -> None:
+def test_unet_has_global_grid_output_and_zero_same_patch_distance() -> None:
     model = UNetEmbeddingDistance(
         in_channels=14,
         patch_size=4,

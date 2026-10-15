@@ -1,9 +1,17 @@
-"""Shared raster-to-patch utilities."""
+"""Raster-to-patch utilities common to the encoders."""
 
 from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+
+
+def bounded_exponential(linear_predictor: jax.Array) -> jax.Array:
+    """Map a predictor to conductance in [0.01, 1000] without exp overflow."""
+    values = jnp.asarray(linear_predictor)
+    # Clipping before exp keeps gradients finite even for saturated predictors.
+    upper = jnp.log(jnp.asarray(1e3 - 1e-2, dtype=values.dtype))
+    return jnp.clip(jnp.exp(jnp.minimum(values, upper)) + 1e-2, 1e-2, 1e3)
 
 
 def patchify(features: jax.Array, patch_size: int) -> tuple[jax.Array, tuple[int, int]]:

@@ -93,3 +93,24 @@ def test_fold_metrics_use_fisher_region_mean_and_pooled_errors() -> None:
     aggregate = aggregate_folds([result, result])
     assert aggregate.pearson_r_sd == 0.0
     assert aggregate.n_folds == 2
+
+
+def test_signed_region_correlations_and_predictive_r2_have_independent_reference():
+    targets = {"A": np.array([0, 1, 2]), "B": np.array([0, 1, 2])}
+    predictions = {"A": np.array([0, 2, 1]), "B": np.array([2, 0, 1])}
+    result = evaluate_fold(predictions, targets)
+    assert result.region_pearson_r == pytest.approx({"A": 0.5, "B": -0.5})
+    assert result.pearson_r == pytest.approx(0.0, abs=1e-12)
+    assert result.r2 == -1
+    assert result.rmse == pytest.approx(1.1547005383792515)
+
+
+def test_fold_summary_uses_arithmetic_mean_and_sample_sd():
+    from deepilg.metrics import FoldMetrics
+
+    folds = [FoldMetrics(v / 4, v, v + 1, 3, {}) for v in (-1, 0, 1, 2, 3)]
+    result = aggregate_folds(folds)
+    assert result.r2_mean == 1
+    assert result.r2_sd == pytest.approx(1.5811388300841898)
+    assert result.pearson_r_mean == 0.25
+    assert result.rmse_mean == 2

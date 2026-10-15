@@ -1,4 +1,4 @@
-"""Regional accumulation preserves the full objective and optimizer semantics."""
+"""Per-region accumulation preserves the full objective and optimizer semantics."""
 
 from dataclasses import replace
 
@@ -261,7 +261,7 @@ def test_training_applies_one_mean_gradient_update_per_epoch(tmp_path, monkeypat
         project=replace(config.project, output_dir=tmp_path),
         training=replace(config.training, epochs=1),
     )
-    monkeypatch.setattr(training, "load_fold_batches", lambda *_: batches)
+    monkeypatch.setattr(training, "load_fold_batches", lambda *_, **__: batches)
     monkeypatch.setattr(training, "initialise_model", lambda *_, **__: model)
     calls = []
 
@@ -270,7 +270,7 @@ def test_training_applies_one_mean_gradient_update_per_epoch(tmp_path, monkeypat
         return objective_value_and_grad(*args, **kwargs)
 
     monkeypatch.setattr(training, "objective_value_and_grad", accumulated)
-    result = training.train_neural_model(config, model_name="unet", fold=0)
+    (result,) = training.train_neural_model(config, model_name="unet", fold=0)
     assert result.epochs_completed == 1
     assert len(calls) == 1
 
@@ -285,7 +285,7 @@ def test_training_applies_one_mean_gradient_update_per_epoch(tmp_path, monkeypat
     updates = jax.tree.map(lambda value: config.training.unet_learning_rate * value, updates)
     expected_model = eqx.apply_updates(model, updates)
     actual_model, actual_state, actual_key = eqx.tree_deserialise_leaves(
-        tmp_path / "unet" / "fold_0" / "latest.eqx", (model, state, next_key)
+        tmp_path / "unet" / "complete" / "fold_00" / "latest.eqx", (model, state, next_key)
     )
     _assert_trees_close(actual_model, expected_model)
     _assert_trees_close(actual_state, expected_state)

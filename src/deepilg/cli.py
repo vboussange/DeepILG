@@ -5,22 +5,30 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
-from .config import ExperimentConfig, load_config
+from .config import POOLING, ExperimentConfig, load_config
 from .data import (
+    discover_fst_regions,
     load_coordinates,
     load_fst_directory,
     validate_population_alignment,
 )
 from .downloads import DownloadedProducts, download_public_products
 from .evaluation import evaluate_model
-from .figures import benchmark_figure, resistance_surface_figure
+from .figures import resistance_surface_figure
 from .preprocessing import preprocess_downloaded_products
 from .provenance import require_publication_safe_manifest
+from .reporting import generate_benchmark_report
 from .resistancega import export_resistancega_inputs, run_resistancega
-from .splits import load_fold_assignments, validate_fold_assignments
+from .splits import (
+    generate_fold_assignments,
+    load_fold_assignments,
+    validate_fold_assignments,
+    write_fold_assignments,
+)
 from .training import fit_reference_model, train_neural_model
 
 
@@ -36,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subcommands.add_parser("validate", help="Validate configuration and light inputs.")
     _config_argument(validate)
 
+    folds = subcommands.add_parser(
+        "folds", help="Draw population-holdout folds from the configured split seed."
+    )
+    _config_argument(folds)
+
     download = subcommands.add_parser("download", help="Download public geospatial products.")
     _config_argument(download)
     download.add_argument("--region", action="append", help="Download one region (repeatable).")
@@ -50,29 +63,42 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = subcommands.add_parser("train", help="Fit one model for one population-holdout fold.")
     _config_argument(train)
-    train.add_argument("--model", choices=("reference", "resnet9", "unet"), required=True)
+    train.add_argument(
+        "--model", choices=("reference", "loglinear", "resnet9", "unet"), required=True
+    )
     train.add_argument("--fold", type=_fold, required=True, help="Population-holdout fold index.")
+    _pooling_argument(train)
+    train.add_argument(
+        "--region", help="Fit only this region (no pooling; default: every region in turn)."
+    )
     train.add_argument("--resume", action="store_true", help="Resume a neural latest checkpoint.")
 
     evaluate = subcommands.add_parser(
-        "evaluate", help="Evaluate one saved fit on held-out test pairs."
+        "evaluate", help="Score the saved fits of one model and fold on held-out test pairs."
     )
     _config_argument(evaluate)
     evaluate.add_argument(
-        "--model", choices=("reference", "resistancega", "resnet9", "unet"), required=True
+        "--model",
+        choices=("reference", "resistancega", "loglinear", "resnet9", "unet"),
+        required=True,
     )
     evaluate.add_argument(
         "--fold", type=_fold, required=True, help="Population-holdout fold index."
     )
+    _pooling_argument(evaluate)
 
-    figures = subcommands.add_parser("figures", help="Generate the benchmark performance figure.")
+    figures = subcommands.add_parser(
+        "figures", help="Report every evaluated treatment, or map resistance surfaces."
+    )
     _config_argument(figures)
     figures.add_argument(
         "--predictions-dir",
         type=Path,
-        help="Directory containing fold_metrics.csv (defaults to <output>/evaluation).",
+        help="Evaluation directory to report (defaults to <output>/evaluation).",
     )
-    figures.add_argument("--output", type=Path, help="Output image path.")
+    figures.add_argument(
+        "--output", type=Path, help="Figure path; its CSV tables are written alongside."
+    )
     figures.add_argument(
         "--kind",
         choices=("benchmark", "resistance"),
@@ -101,11 +127,25 @@ def build_parser() -> argparse.ArgumentParser:
     resistancega.add_argument(
         "--rscript", default="Rscript", help="Rscript executable (default: Rscript)."
     )
+    resistancega.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=1,
+        help="CPU workers for the genetic algorithm's fitness evaluations (default: 1).",
+    )
     return parser
 
 
 def _config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, required=True, help="Path to a TOML configuration.")
+
+
+def _pooling_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pooling",
+        choices=POOLING,
+        help="Override [training].pooling: one model across regions or one per region.",
+    )
 
 
 def _fold(value: str) -> int:
@@ -116,6 +156,16 @@ def _fold(value: str) -> int:
         raise argparse.ArgumentTypeError("fold must be an integer") from error
     if number < 0:
         raise argparse.ArgumentTypeError("fold must be a non-negative integer")
+    return number
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
     return number
 
 
@@ -143,6 +193,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run one CLI command and return a process exit status."""
     arguments = build_parser().parse_args(argv)
     config = load_config(arguments.config)
+    pooling = getattr(arguments, "pooling", None)
+    if pooling is not None:
+        if arguments.model == "resistancega" and pooling != "none":
+            raise ValueError("ResistanceGA fits each region separately (no pooling)")
+        config = replace(config, training=replace(config.training, pooling=pooling))
     if arguments.command == "validate":
         summary = validate_inputs(config)
         print(json.dumps(summary, indent=2))
@@ -151,6 +206,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "\nWARNING: artificial coordinates are for execution testing only; "
                 "derived results have no ecological interpretation."
             )
+        return 0
+
+    if arguments.command == "folds":
+        matrices = load_fst_directory(config.data.fst_dir)
+        folds = generate_fold_assignments(
+            {region: matrix.population_ids for region, matrix in matrices.items()},
+            seed=config.data.split_seed,
+        )
+        destination = write_fold_assignments(folds, config.data.folds)
+        print(
+            f"wrote {len(folds.fold_indices)} folds for {len(folds.regions)} regions "
+            f"(split_seed={config.data.split_seed}) to {destination}"
+        )
         return 0
 
     if arguments.command == "download":
@@ -172,20 +240,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.model == "reference":
             if arguments.resume:
                 raise ValueError("--resume applies only to neural models")
-            model, path = fit_reference_model(config, fold=arguments.fold)
+            if arguments.region is not None and config.training.pooling == "complete":
+                raise ValueError("A single region can be fitted only under no pooling")
+            regions = (arguments.region,)
+            if config.training.pooling == "none" and arguments.region is None:
+                regions = tuple(discover_fst_regions(config.data.fst_dir))
+            for region in regions:
+                model, path = fit_reference_model(config, fold=arguments.fold, region=region)
+                suffix = f" {region}" if region else ""
+                print(
+                    f"reference fold {arguments.fold}{suffix}: slope={model.slope:.6g}, "
+                    f"intercept={model.intercept:.6g}; wrote {path}"
+                )
+            return 0
+        results = train_neural_model(
+            config,
+            model_name=arguments.model,
+            fold=arguments.fold,
+            resume=arguments.resume,
+            region=arguments.region,
+        )
+        for result in results:
+            suffix = f" {result.region}" if result.region else ""
             print(
-                f"reference fold {arguments.fold}: slope={model.slope:.6g}, "
-                f"intercept={model.intercept:.6g}; wrote {path}"
-            )
-        else:
-            result = train_neural_model(
-                config,
-                model_name=arguments.model,
-                fold=arguments.fold,
-                resume=arguments.resume,
-            )
-            print(
-                f"{result.model} fold {result.fold}: best validation loss "
+                f"{result.model} fold {result.fold}{suffix}: best validation loss "
                 f"{result.best_validation_loss:.6g} at epoch {result.best_epoch}; "
                 f"wrote {result.checkpoint}"
             )
@@ -205,24 +283,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "figures":
         config.assert_publication_safe()
         predictions_dir = arguments.predictions_dir or config.project.output_dir / "evaluation"
-        require_publication_safe_manifest(predictions_dir)
         if arguments.kind == "benchmark":
-            source = predictions_dir / "fold_metrics.csv"
-            destination = (
-                arguments.output or config.project.output_dir / "figures" / "benchmark.pdf"
+            require_publication_safe_manifest(predictions_dir)
+            result = generate_benchmark_report(
+                config, evaluation_dir=predictions_dir, figure=arguments.output
             )
-            result = benchmark_figure(source, destination)
         else:
             destination = (
                 arguments.output
                 or config.project.output_dir / "figures" / "resistance_surfaces.pdf"
             )
-            result = resistance_surface_figure(
-                predictions_dir,
-                config.data.processed_dir,
-                destination,
-                patch_size=config.preprocessing.patch_size,
-            )
+            result = resistance_surface_figure(config, destination)
         print(f"wrote {result}")
         return 0
 
@@ -238,6 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             mode=arguments.mode,
             split=arguments.split,
             rscript=arguments.rscript,
+            workers=arguments.workers,
         )
         print(f"wrote {destination}")
         return 0

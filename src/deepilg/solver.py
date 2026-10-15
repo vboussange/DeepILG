@@ -22,7 +22,7 @@ class AMGContext:
     """Solver context with dynamic hierarchy arrays and a static graph shape.
 
     The reusable JAXScape state remains a PyTree input, not a compiled constant.
-    Construct it on the host before compiling regional predictions or losses.
+    Construct it on the host before compiling per-region predictions or losses.
     """
 
     graph_shape: tuple[int, int] = field(metadata={"static": True})

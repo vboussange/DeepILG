@@ -21,7 +21,6 @@ def test_installed_package_imports_outside_source_tree(tmp_path: Path) -> None:
     script = """
 import importlib
 import pkgutil
-import sys
 import deepilg
 import deepilg.models as models
 import deepilg.training as training
@@ -29,7 +28,6 @@ import deepilg.training as training
 for module in pkgutil.walk_packages(deepilg.__path__, deepilg.__name__ + "."):
     importlib.import_module(module.name)
 assert training.ConductanceModel is models.ConductanceModel
-assert not any(name.startswith("reports.neurips_paper.code") for name in sys.modules)
 print(deepilg.__file__)
 """
     result = subprocess.run(

@@ -36,7 +36,7 @@ class ConductanceModel(eqx.Module):
         context: AMGContext | None = None,
         patch_batch_size: int | None = None,
     ) -> tuple[jax.Array, jax.Array]:
-        """Return pairwise effective resistances and their shared conductance grid."""
+        """Return pairwise effective resistances and the conductance grid behind them."""
         conductance = self.conductance(features, patch_batch_size=patch_batch_size)
         nodes = pixel_to_patch_nodes(
             pixel_nodes,

@@ -9,6 +9,8 @@ fst_dir = "data/wade2025/fst"
 # Exact authorized WGS84 locations must be supplied at this ignored path.
 coordinates = "data/private/wade2025/coordinates.csv"
 folds = "data/wade2025/folds.csv"
+# Seed used by `deepilg folds` to draw the population-holdout assignment.
+split_seed = 17
 # Downloaded products and processed tensors are local, generated data.
 cache_dir = "cache/benchmark"
 processed_dir = "outputs/benchmark/processed"
@@ -26,17 +28,20 @@ road_radius_m = 300
 [training]
 # One deterministic neural fit is defined for each architecture and population-holdout fold.
 seed = 17
-# Select the best validation checkpoint, stopping after 50 stale epochs.
-epochs = 500
+# Select the best validation checkpoint, stopping after 50 stale epochs or 2000 epochs.
+epochs = 2000
 patience = 50
+# Fit one model across all regions ("complete") or one model per region ("none").
+pooling = "complete"
 # Architecture-specific initial learning rates used in the manuscript benchmark.
 resnet9_learning_rate = 0.0001
+loglinear_learning_rate = 0.01
 unet_learning_rate = 0.001
 # After 20 stale epochs, halve the learning rate and restart AdamW's moments, with a 1e-6 floor.
 lr_patience = 20
 lr_factor = 0.5
 min_learning_rate = 0.000001
-# AdamW regularization shared by both neural architectures.
+# AdamW regularization applied to all trained encoders.
 weight_decay = 0.0001
 # Omit to encode each full region without ResNet9 activation checkpointing.
 # Uncomment to checkpoint ResNet9 chunks (also when all patches fit in one chunk).
@@ -47,6 +52,6 @@ weight_decay = 0.0001
 # Conjugate-gradient tolerances and iteration cap for grounded Laplacian systems.
 rtol = 1e-6
 atol = 1e-6
-max_steps = 1000
+max_steps = 10000
 # Reuse an AMJax hierarchy to reduce iteration count and memory pressure.
 use_amg = true
